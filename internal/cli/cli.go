@@ -52,9 +52,7 @@ func gitSync(subfolder string) string {
 	// Try to load config from the synced repo to populate global settings (like site title)
 	navigation.LoadNavConfig(filepath.Join(cache, subfolder))
 
-	if config.PullInterval != "" {
-		navigation.StartGitBackgroundSync(config.GitURL, config.GitRef, subfolder, cache, config.PullInterval)
-	}
+	navigation.StartGitBackgroundSync(config.GitURL, config.GitRef, subfolder, cache, config.PullInterval)
 	return filepath.Join(cache, subfolder)
 }
 

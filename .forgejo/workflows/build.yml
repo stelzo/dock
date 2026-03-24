@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/SchemaStore/schemastore/refs/heads/master/src/schemas/json/github-workflow.json
+
+name: Build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-dev-noble-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deps
+        run: |
+          go mod tidy
+          go fmt ./...
+      - name: Build
+        run: |
+          go build
+      - name: Lint
+        run: |
+          curl -sSfL https://golangci-lint.run/install.sh | sh -s v2.11.3
+          ./bin/golangci-lint run

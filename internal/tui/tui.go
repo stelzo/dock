@@ -206,11 +206,15 @@ type Model struct {
 	PsearchCursor  int
 	DocSeq         uint64
 
+	NavHistory     []navHistEntry
+	RestoreYOffset int // -1 means no restore
+
 	ImageRefs          []images.ImageRef
 	ImageIdx           int
 	CodeActive         bool
 	LinkActive         bool
 	ImageActive        bool
+	HelpOverlay        bool
 	CodeOverlay        bool
 	CodeOverlaySrc     string
 	LinkOverlay        bool
@@ -235,13 +239,14 @@ type Model struct {
 func NewModel(docs string, w, h int) Model {
 	entries := navigation.BuildNav(docs)
 	m := Model{
-		Docs:     docs,
-		Entries:  entries,
-		Width:    w,
-		Height:   h,
-		Focus:    "nav",
-		Ready:    w > 0 && h > 0,
-		ThemeIdx: config.DefaultThemeIdx,
+		Docs:           docs,
+		Entries:        entries,
+		Width:          w,
+		Height:         h,
+		Focus:          "nav",
+		Ready:          w > 0 && h > 0,
+		ThemeIdx:       config.DefaultThemeIdx,
+		RestoreYOffset: -1,
 	}
 	for i, e := range entries {
 		if e.FilePath != "" {
@@ -297,6 +302,9 @@ func (m Model) getHint() string {
 	if m.Focus == "gsearch" {
 		return " ↑↓/jk: select · enter: open · esc: cancel"
 	}
+	if m.HelpOverlay {
+		return " [help] esc/enter/?: close"
+	}
 	if m.ImageOverlay {
 		return fmt.Sprintf(" [%d/%d] %s · enter/esc: close",
 			m.ImageIdx+1, len(m.ImageRefs), m.ImageRefs[m.ImageIdx].Alt)
@@ -312,8 +320,12 @@ func (m Model) getHint() string {
 			m.CopyIdx+1, len(m.CodeBlocks))
 	}
 	if m.LinkActive {
-		return fmt.Sprintf(" [link %d/%d] l/L: next/prev · enter: follow/copy · esc: exit",
-			m.LinkIdx+1, len(m.Links))
+		hint := "enter: open"
+		if m.LinkIdx < len(m.Links) && !m.Links[m.LinkIdx].IsInternal {
+			hint = "enter: show URL"
+		}
+		return fmt.Sprintf(" [link %d/%d] l/L: next/prev · %s · esc: exit",
+			m.LinkIdx+1, len(m.Links), hint)
 	}
 	if m.ImageActive {
 		return fmt.Sprintf(" [image %d/%d] i: next · I: prev · enter: show · esc: exit image nav",
@@ -347,6 +359,9 @@ func (m Model) getHint() string {
 			parts = append(parts, "tab:\u00A0nav")
 		}
 		parts = append(parts, "space:\u00A0nav", "/:\u00A0search", "t:\u00A0theme", "q\u00A0quit")
+		if len(m.NavHistory) > 0 {
+			parts = append(parts, "⌫:\u00A0back")
+		}
 		if n := len(m.CodeBlocks); n > 0 {
 			parts = append(parts, "c:\u00A0copy\u00A0code")
 		}
@@ -363,7 +378,17 @@ func (m Model) getHint() string {
 func (m Model) statusLine() string {
 	h := strings.ReplaceAll(m.getHint(), "\n", " · ")
 	h = strings.ReplaceAll(h, "\r", "")
-	return ui.Truncate(h, max(1, m.Width-1))
+	maxW := max(1, m.Width-1)
+	if !m.HelpOverlay && !m.CodeOverlay && !m.LinkOverlay && !m.ImageOverlay &&
+		m.Focus != "search" && m.Focus != "gsearch" && m.Focus != "pagesearch" && m.Focus != "theme" {
+		suffix := "  ?:help"
+		sw := ui.VisWidth(suffix)
+		if ui.VisWidth(h)+sw <= maxW {
+			return h + suffix
+		}
+		return ui.Truncate(h, max(1, maxW-sw)) + suffix
+	}
+	return ui.Truncate(h, maxW)
 }
 
 func (m Model) statusHeight() int {
@@ -394,7 +419,6 @@ func (m Model) layoutMetrics() layoutMetrics {
 		navInnerW = preferredNavInnerW
 		navOuterW = navInnerW + 4
 		if safeW-navOuterW < 20 {
-			// shrink nav to give content at least 20 columns
 			navInnerW = max(10, safeW-20-4)
 			navOuterW = navInnerW + 4
 		}
@@ -562,6 +586,20 @@ func loadDoc(path string, th themes.Theme, width int, entries []navigation.NavEn
 	}
 }
 
+type navHistEntry struct {
+	Cursor  int
+	YOffset int
+}
+
+const navHistMax = 100
+
+func (m *Model) appendNavHistory(e navHistEntry) {
+	m.NavHistory = append(m.NavHistory, e)
+	if len(m.NavHistory) > navHistMax {
+		m.NavHistory = m.NavHistory[len(m.NavHistory)-navHistMax:]
+	}
+}
+
 func (m *Model) openCurrent() tea.Cmd {
 	if m.Cursor < 0 || m.Cursor >= len(m.Entries) {
 		return nil
@@ -571,7 +609,6 @@ func (m *Model) openCurrent() tea.Cmd {
 		return nil
 	}
 	m.DocSeq++
-	// Render markdown to the same width as the viewport's text area.
 	renderW := m.markdownWidth()
 	return tea.Batch(
 		loadDoc(e.FilePath, m.currentTheme(), renderW, m.Entries, m.DocSeq),
@@ -712,6 +749,7 @@ func (m *Model) highlightCurrentImage() {
 func (m *Model) jumpToNav() tea.Cmd {
 	var cmd tea.Cmd
 	m.clearContentTargetModes()
+	m.HelpOverlay = false
 	m.CodeOverlay = false
 	m.CodeOverlaySrc = ""
 	m.LinkOverlay = false
@@ -829,6 +867,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.RawContent = msg.content
 		m.Vp.SetContent(m.RawContent)
 		m.Vp.GotoTop()
+		if m.RestoreYOffset >= 0 {
+			m.Vp.SetYOffset(m.RestoreYOffset)
+			m.RestoreYOffset = -1
+		}
 		m.CodeBlocks = msg.codeBlocks
 		m.CopyIdx = 0
 		m.Links = msg.links
@@ -893,6 +935,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		followLink := func(lk markdown.DocLink) {
 			m.Focus = "content"
 			if lk.IsInternal && lk.NavIdx >= 0 {
+				m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
 				m.Cursor = lk.NavIdx
 				m = m.ensureCursorVisible(m.navEntrySpace())
 				cmds = append(cmds, m.openCurrent())
@@ -1006,6 +1049,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					visIdx := (mouse.Y - lm.navInnerY) - titleOffset
 					navIdx := m.NavOffset + visIdx
 					if visIdx >= 0 && navIdx >= 0 && navIdx < len(m.Entries) {
+						if m.Entries[navIdx].FilePath != "" && navIdx != m.Cursor {
+							m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
+						}
 						m.Cursor = navIdx
 						if m.Entries[navIdx].FilePath != "" {
 							m.Focus = "content"
@@ -1051,6 +1097,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case " ", "space":
 			cmds = append(cmds, m.jumpToNav())
+			return m, tea.Batch(cmds...)
+		}
+		if m.HelpOverlay {
+			switch msg.String() {
+			case "esc", "enter", "?":
+				m.HelpOverlay = false
+			}
 			return m, tea.Batch(cmds...)
 		}
 		switch m.Focus {
@@ -1133,6 +1186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "enter":
 				if len(m.GsearchResults) > 0 {
+					m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
 					r := m.GsearchResults[m.GsearchCursor]
 					m.Cursor = r.NavIdx
 					m = m.ensureCursorVisible(m.navEntrySpace())
@@ -1182,6 +1236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.PsearchResults = nil
 				m.PsearchCursor = 0
 			case "enter":
+				m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
 				if len(m.PsearchResults) > 0 {
 					m.Cursor = m.PsearchResults[m.PsearchCursor]
 					m = m.ensureCursorVisible(m.navEntrySpace())
@@ -1240,14 +1295,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				oldCursor := m.Cursor
 				m = m.moveCursor(-1)
 				if m.Cursor != oldCursor && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
+					m.appendNavHistory(navHistEntry{oldCursor, m.Vp.YOffset()})
 					cmds = append(cmds, m.openCurrent())
 				}
 			case "down", "j":
 				oldCursor := m.Cursor
 				m = m.moveCursor(1)
 				if m.Cursor != oldCursor && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
+					m.appendNavHistory(navHistEntry{oldCursor, m.Vp.YOffset()})
 					cmds = append(cmds, m.openCurrent())
 				}
+			case "?":
+				m.HelpOverlay = !m.HelpOverlay
 			}
 		default:
 			switch msg.String() {
@@ -1329,6 +1388,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					lk := m.Links[m.LinkIdx]
 					if lk.IsInternal && lk.NavIdx >= 0 {
 						m.clearContentTargetModes()
+						m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
 						m.Cursor = lk.NavIdx
 						m = m.ensureCursorVisible(m.navEntrySpace())
 						cmds = append(cmds, m.openCurrent())
@@ -1382,16 +1442,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.SearchMatches = nil
 					m.showRawContent()
 				}
+			case "backspace":
+				if len(m.NavHistory) > 0 {
+					entry := m.NavHistory[len(m.NavHistory)-1]
+					m.NavHistory = m.NavHistory[:len(m.NavHistory)-1]
+					m.Cursor = entry.Cursor
+					m = m.ensureCursorVisible(m.navEntrySpace())
+					m.RestoreYOffset = entry.YOffset
+					cmds = append(cmds, m.openCurrent())
+				}
 			case "tab":
 				if m.NavHidden {
+					oldCursor := m.Cursor
 					m = m.moveCursor(1)
+					if m.Cursor != oldCursor {
+						m.appendNavHistory(navHistEntry{oldCursor, m.Vp.YOffset()})
+					}
 					cmds = append(cmds, m.openCurrent())
 				} else {
 					m.Focus = "nav"
 				}
 			case "shift+tab":
 				if m.NavHidden {
+					oldCursor := m.Cursor
 					m = m.moveCursor(-1)
+					if m.Cursor != oldCursor {
+						m.appendNavHistory(navHistEntry{oldCursor, m.Vp.YOffset()})
+					}
 					cmds = append(cmds, m.openCurrent())
 				} else {
 					m.Focus = "nav"
@@ -1446,6 +1523,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.NavHidden = !m.NavHidden
 				m.Vp.SetWidth(m.vpW())
 				cmds = append(cmds, m.openCurrent())
+			case "?":
+				m.HelpOverlay = !m.HelpOverlay
 			}
 		}
 	}
@@ -1539,6 +1618,125 @@ func (m Model) renderImageOverlay() string {
 		Render(content)
 }
 
+func (m Model) renderHelpOverlay() string {
+	th := m.currentTheme()
+	lm := m.layoutMetrics()
+
+	type binding struct{ key, desc string }
+	sections := []struct {
+		title    string
+		bindings []binding
+	}{
+		{"Navigation", []binding{
+			{"↑↓ / j k", "move cursor"},
+			{"tab / space", "switch nav ↔ content"},
+			{"\\ ", "toggle / hide nav"},
+			{"enter / →", "open page"},
+			{"backspace", "go back"},
+		}},
+		{"Scrolling", []binding{
+			{"↑↓ / j k", "scroll line"},
+			{"pgup / pgdn", "scroll page"},
+		}},
+		{"Search", []binding{
+			{"/ (nav)", "global search"},
+			{"/ (content)", "in-page search"},
+			{"p", "page-title search"},
+			{"n / N", "next / prev match"},
+			{"esc", "cancel search"},
+		}},
+		{"Code Blocks", []binding{
+			{"c / C", "next / prev block"},
+			{"enter / y", "show block"},
+			{"esc", "exit code mode"},
+		}},
+		{"Links", []binding{
+			{"l / L", "next / prev link"},
+			{"enter", "open / show URL"},
+			{"esc", "exit link mode"},
+		}},
+		{"Images", []binding{
+			{"i / I", "next / prev image"},
+			{"enter", "show image"},
+			{"esc", "exit image mode"},
+		}},
+		{"Other", []binding{
+			{"t", "theme picker"},
+			{"?", "this help"},
+			{"q / ctrl+c", "quit"},
+		}},
+	}
+
+	keyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.NavSelFg)).
+		Background(lipgloss.Color(th.NavSelBg)).
+		Bold(true)
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.NavItemFg))
+	headerStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.SectionHdrFg)).
+		Bold(true)
+
+	colW := (lm.safeW - 4) / 2
+	if colW < 30 {
+		colW = lm.safeW - 4
+	}
+	twoCol := lm.safeW >= 70
+	keyW := 16
+
+	renderSection := func(s struct {
+		title    string
+		bindings []binding
+	}) []string {
+		var lines []string
+		lines = append(lines, headerStyle.Render(s.title))
+		for _, b := range s.bindings {
+			key := keyStyle.Width(keyW).Render(b.key)
+			desc := descStyle.Render(b.desc)
+			lines = append(lines, "  "+key+" "+desc)
+		}
+		return lines
+	}
+
+	var cols [2][]string
+	for i, sec := range sections {
+		target := 0
+		if twoCol && i >= (len(sections)+1)/2 {
+			target = 1
+		}
+		cols[target] = append(cols[target], renderSection(sec)...)
+		cols[target] = append(cols[target], "")
+	}
+
+	var bodyLines []string
+	titleLine := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.SectionHdrFg)).
+		Bold(true).
+		Width(lm.safeW).
+		Align(lipgloss.Center).
+		Render("Keybindings")
+	bodyLines = append(bodyLines, "", titleLine, "")
+
+	if twoCol {
+		maxRows := max(len(cols[0]), len(cols[1]))
+		for i := 0; i < maxRows; i++ {
+			left, right := "", ""
+			if i < len(cols[0]) {
+				left = cols[0][i]
+			}
+			if i < len(cols[1]) {
+				right = cols[1][i]
+			}
+			leftPad := lipgloss.NewStyle().Width(colW).Render(left)
+			bodyLines = append(bodyLines, "  "+leftPad+"  "+right)
+		}
+	} else {
+		bodyLines = append(bodyLines, cols[0]...)
+	}
+
+	return strings.Join(bodyLines, "\n")
+}
+
 func (m Model) renderCodeOverlay() string {
 	lm := m.layoutMetrics()
 	return lipgloss.NewStyle().
@@ -1565,7 +1763,6 @@ func (m Model) View() tea.View {
 
 	th := m.currentTheme()
 	lm := m.layoutMetrics()
-	// Keep viewport dimensions in sync before rendering its content.
 	m.Vp.SetWidth(lm.vpW)
 	m.Vp.SetHeight(lm.vpH)
 
@@ -1607,6 +1804,9 @@ func (m Model) View() tea.View {
 		return v
 	}
 
+	if m.HelpOverlay {
+		return renderFullScreenOverlay(m.renderHelpOverlay())
+	}
 	if m.CodeOverlay {
 		return renderFullScreenOverlay(m.renderCodeOverlay())
 	}

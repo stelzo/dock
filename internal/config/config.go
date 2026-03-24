@@ -19,7 +19,6 @@ var (
 
 const Version = "0.1.0"
 
-// Config represents the structure of the dock configuration file (YAML/TOML).
 type Config struct {
 	SiteName     string        `yaml:"site_name" toml:"site_name"`
 	Nav          []interface{} `yaml:"nav" toml:"nav"`

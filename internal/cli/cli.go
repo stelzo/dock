@@ -98,9 +98,7 @@ var rootCmd = &cobra.Command{
 			docs = args[0]
 		}
 
-		// Check if it's an SSH target (contains @) or if it's not a local path
 		if strings.Contains(docs, "@") || (!filepath.IsAbs(docs) && docs != "." && !strings.HasPrefix(docs, "./") && !strings.HasPrefix(docs, "../")) {
-			// If it doesn't exist locally, treat as SSH
 			if _, err := os.Stat(docs); os.IsNotExist(err) {
 				remoteConnect(docs)
 				return
@@ -120,13 +118,11 @@ func remoteConnect(target string) {
 		host = after
 	}
 
-	// Use CLI flag first, then fallback to DOCK_THEME environment variable
 	effectiveTheme := theme
 	if effectiveTheme == "" {
 		effectiveTheme = os.Getenv("DOCK_THEME")
 	}
 
-	// If theme is set, prefix the user
 	if effectiveTheme != "" {
 		if user == "" {
 			user = effectiveTheme
@@ -153,7 +149,6 @@ func remoteConnect(target string) {
 
 	log.Debug("executing remote connect", "args", strings.Join(append(sshCmdArgs, sshArgs...), " "))
 
-	// We use the system ssh command to handle the connection, TTY, etc.
 	cmd := exec.Command("ssh", append(sshCmdArgs, sshArgs...)...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout

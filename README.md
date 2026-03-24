@@ -53,11 +53,10 @@ dock ./my-awesome-docs
 ```
 
 ### 🔗 Remote Client Mode
-Connect to a remote dock instance directly:
+Connect to a remote dock instance directly. This is just a fancy wrapper around ssh that prefixes the theme and ports if set via environment variables or flags.
 ```bash
-dock marina@localhost -p 2222
+DOCK_SSH_PORT=22 dock marina@steado.tech --theme nord
 ```
-If you provide a `--theme` flag or have `DOCK_THEME` set, it will automatically be prefixed to your username (e.g. `pink.marina@localhost`) to select the theme on the remote server.
 
 ---
 

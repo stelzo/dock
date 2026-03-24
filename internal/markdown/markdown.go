@@ -169,17 +169,43 @@ type DocLink struct {
 }
 
 var (
-	imgStripRe = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
-	mdLinkRe   = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
-	urlRe      = regexp.MustCompile(`https?://[^\s)]+`)
+	imgStripRe   = regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	mdLinkRe     = regexp.MustCompile(`\[([^\]]+)\]\(([^)\s]+)\)`)
+	urlRe        = regexp.MustCompile(`https?://[^\s)]+`)
+	mdInlineRe   = regexp.MustCompile("`+|\\*+|_{1,2}")
+	inlineCodeRe = regexp.MustCompile("`[^`\n]+`")
 )
 
+// stripCodeContent removes fenced code block content and inline code spans
+// from markdown so that URLs inside code are not mistaken for real links.
+func stripCodeContent(md string) string {
+	lines := strings.Split(md, "\n")
+	out := make([]string, 0, len(lines))
+	inFence := false
+	var fenceMarker string
+	for _, line := range lines {
+		if !inFence {
+			if m := fenceRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+				inFence = true
+				fenceMarker = m[1]
+				continue
+			}
+			out = append(out, line)
+		} else {
+			if strings.HasPrefix(strings.TrimSpace(line), fenceMarker) {
+				inFence = false
+			}
+		}
+	}
+	plain := strings.Join(out, "\n")
+	return inlineCodeRe.ReplaceAllString(plain, "")
+}
+
 func ExtractLinks(md, currentFile, rendered string, entries []navigation.NavEntry) []DocLink {
-	stripped := imgStripRe.ReplaceAllString(md, "")
+	stripped := stripCodeContent(imgStripRe.ReplaceAllString(md, ""))
 	var links []DocLink
 	seen := map[string]bool{}
 
-	// Extract standard markdown links
 	for _, m := range mdLinkRe.FindAllStringSubmatch(stripped, -1) {
 		text, rawURL := strings.TrimSpace(m[1]), m[2]
 		if seen[rawURL] || strings.HasPrefix(rawURL, "#") {
@@ -206,7 +232,6 @@ func ExtractLinks(md, currentFile, rendered string, entries []navigation.NavEntr
 		links = append(links, lk)
 	}
 
-	// Extract raw URLs
 	for _, rawURL := range urlRe.FindAllString(stripped, -1) {
 		if seen[rawURL] {
 			continue
@@ -223,14 +248,29 @@ func ExtractLinks(md, currentFile, rendered string, entries []navigation.NavEntr
 	rendLines := strings.Split(rendered, "\n")
 	searchFrom := 0
 	for i := range links {
-		needle := strings.ToLower(links[i].RawText)
-		if needle == "" {
+		// Prefer OSC 8 URL matching: it survives word-wrap and skips
+		// headings that share text with a link label.
+		if li, s, e := findOSC8Link(rendLines, links[i].URL, searchFrom); li >= 0 {
+			links[i].Line = li
+			links[i].StartCol = s
+			links[i].EndCol = e
+			searchFrom = li
 			continue
 		}
+		// Fallback: plain-text label search (strips inline markdown markers).
+		raw := strings.ToLower(links[i].RawText)
+		if raw == "" {
+			continue
+		}
+		stripped := mdInlineRe.ReplaceAllString(raw, "")
 		for li := searchFrom; li < len(rendLines); li++ {
-			line := rendLines[li]
-			plain := ui.AnsiEscRe.ReplaceAllString(line, "")
-			idx := strings.Index(strings.ToLower(plain), needle)
+			plain := strings.ToLower(ui.AnsiEscRe.ReplaceAllString(rendLines[li], ""))
+			needle := raw
+			idx := strings.Index(plain, needle)
+			if idx < 0 && stripped != raw && stripped != "" {
+				needle = stripped
+				idx = strings.Index(plain, needle)
+			}
 			if idx >= 0 {
 				links[i].Line = li
 				links[i].StartCol = idx
@@ -241,6 +281,48 @@ func ExtractLinks(md, currentFile, rendered string, entries []navigation.NavEntr
 		}
 	}
 	return links
+}
+
+// findOSC8Link searches rendered lines for the first OSC 8 hyperlink sequence
+// whose URL matches rawURL (also tries with a leading "./" stripped or added).
+// Returns the line index and the visible start/end columns of the link text,
+// or (-1, 0, 0) if not found.
+func findOSC8Link(rendLines []string, rawURL string, searchFrom int) (line, startCol, endCol int) {
+	candidates := []string{rawURL}
+	if strings.HasPrefix(rawURL, "./") {
+		candidates = append(candidates, rawURL[2:])
+	} else if !strings.Contains(rawURL, "://") {
+		candidates = append(candidates, "./"+rawURL)
+	}
+	const osc8Open = "\x1b]8;"
+	const osc8Close = "\x1b]8;;\a"
+	for li := searchFrom; li < len(rendLines); li++ {
+		raw := rendLines[li]
+		for _, u := range candidates {
+			marker := ";" + u + "\a"
+			idx := strings.Index(raw, marker)
+			if idx < 0 {
+				continue
+			}
+			// Find the \x1b]8; that opens this sequence.
+			osc8Idx := strings.LastIndex(raw[:idx], osc8Open)
+			if osc8Idx < 0 {
+				continue
+			}
+			startCol = ui.VisWidth(raw[:osc8Idx])
+			afterMarker := idx + len(marker)
+			closeIdx := strings.Index(raw[afterMarker:], osc8Close)
+			var linkText string
+			if closeIdx >= 0 {
+				linkText = raw[afterMarker : afterMarker+closeIdx]
+			} else {
+				linkText = raw[afterMarker:]
+			}
+			endCol = startCol + ui.VisWidth(linkText)
+			return li, startCol, endCol
+		}
+	}
+	return -1, 0, 0
 }
 
 var (

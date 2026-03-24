@@ -234,6 +234,17 @@ type Model struct {
 	CellPixW       int
 	CellPixH       int
 	SshSession     ssh.Session
+
+	NavScrollSeq      uint64
+	LastNavScrollTime time.Time
+}
+
+type navScrollDebounceMsg uint64
+
+func navScrollDebounceCmd(seq uint64) tea.Cmd {
+	return tea.Tick(150*time.Millisecond, func(_ time.Time) tea.Msg {
+		return navScrollDebounceMsg(seq)
+	})
 }
 
 func NewModel(docs string, w, h int) Model {
@@ -256,6 +267,7 @@ func NewModel(docs string, w, h int) Model {
 	}
 	if m.Ready {
 		m.Vp = viewport.New(viewport.WithWidth(m.vpW()), viewport.WithHeight(m.vpH()))
+		m.Vp.MouseWheelDelta = 1
 	}
 	return m
 }
@@ -838,6 +850,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.Width, m.Height = msg.Width, msg.Height
 		if !m.Ready {
 			m.Vp = viewport.New(viewport.WithWidth(m.vpW()), viewport.WithHeight(m.vpH()))
+			m.Vp.MouseWheelDelta = 1
 			m.Ready = true
 		} else {
 			m.Vp.SetWidth(m.vpW())
@@ -859,6 +872,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.KittySupported = true
 		}
 		cmds = append(cmds, m.openCurrent())
+
+	case navScrollDebounceMsg:
+		if uint64(msg) == m.NavScrollSeq && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
+			cmds = append(cmds, m.openCurrent())
+		}
 
 	case docMsg:
 		if msg.Seq != m.DocSeq {
@@ -954,17 +972,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.MouseWheelUp:
 				switch m.Focus {
 				case "theme":
-					if m.ThemeIdx > 0 {
-						m.ThemeIdx--
-						cmds = append(cmds, m.openCurrent())
+					now := time.Now()
+					if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
+						m.LastNavScrollTime = now
+						if m.ThemeIdx > 0 {
+							m.ThemeIdx--
+							cmds = append(cmds, m.openCurrent())
+						}
 					}
-					return m, nil
+					return m, tea.Batch(cmds...)
 				default:
 					if inNav {
-						oldCursor := m.Cursor
-						m = m.moveCursor(-1)
-						if m.Cursor != oldCursor && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
-							cmds = append(cmds, m.openCurrent())
+						now := time.Now()
+						if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
+							m.LastNavScrollTime = now
+							m = m.moveCursor(-1)
+							m.NavScrollSeq++
+							cmds = append(cmds, navScrollDebounceCmd(m.NavScrollSeq))
 						}
 						return m, tea.Batch(cmds...)
 					}
@@ -975,17 +999,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.MouseWheelDown:
 				switch m.Focus {
 				case "theme":
-					if m.ThemeIdx < len(themes.Themes)-1 {
-						m.ThemeIdx++
-						cmds = append(cmds, m.openCurrent())
+					now := time.Now()
+					if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
+						m.LastNavScrollTime = now
+						if m.ThemeIdx < len(themes.Themes)-1 {
+							m.ThemeIdx++
+							cmds = append(cmds, m.openCurrent())
+						}
 					}
-					return m, nil
+					return m, tea.Batch(cmds...)
 				default:
 					if inNav {
-						oldCursor := m.Cursor
-						m = m.moveCursor(1)
-						if m.Cursor != oldCursor && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
-							cmds = append(cmds, m.openCurrent())
+						now := time.Now()
+						if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
+							m.LastNavScrollTime = now
+							m = m.moveCursor(1)
+							m.NavScrollSeq++
+							cmds = append(cmds, navScrollDebounceCmd(m.NavScrollSeq))
 						}
 						return m, tea.Batch(cmds...)
 					}
@@ -1041,23 +1071,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.openCurrent())
 				}
 			default:
-				if inNav && inRows {
-					titleOffset := 0
-					if config.DocsTitle != "" {
-						titleOffset = 2
-					}
-					visIdx := (mouse.Y - lm.navInnerY) - titleOffset
-					navIdx := m.NavOffset + visIdx
-					if visIdx >= 0 && navIdx >= 0 && navIdx < len(m.Entries) {
-						if m.Entries[navIdx].FilePath != "" && navIdx != m.Cursor {
-							m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
+				if inNav {
+					m.Focus = "nav"
+					if inRows {
+						titleOffset := 0
+						if config.DocsTitle != "" {
+							titleOffset = 2
 						}
-						m.Cursor = navIdx
-						if m.Entries[navIdx].FilePath != "" {
-							m.Focus = "content"
-							cmds = append(cmds, m.openCurrent())
-						} else {
-							m.Focus = "nav"
+						visIdx := (mouse.Y - lm.navInnerY) - titleOffset
+						navIdx := m.NavOffset + visIdx
+						if visIdx >= 0 && navIdx >= 0 && navIdx < len(m.Entries) {
+							if m.Entries[navIdx].FilePath != "" && navIdx != m.Cursor {
+								m.appendNavHistory(navHistEntry{m.Cursor, m.Vp.YOffset()})
+							}
+							m.Cursor = navIdx
+							if m.Entries[navIdx].FilePath != "" {
+								cmds = append(cmds, m.openCurrent())
+							}
 						}
 					}
 				} else if inContent && inRows {
@@ -1103,6 +1133,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "esc", "enter", "?":
 				m.HelpOverlay = false
+			case "q", "ctrl+c":
+				return m, tea.Quit
 			}
 			return m, tea.Batch(cmds...)
 		}

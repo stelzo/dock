@@ -83,7 +83,7 @@ ssh -p 2222 nord@localhost
 
 ## ⚙️ Config
 
-### 📄 Config File
+### File
 
 Dock reads navigation order and project metadata from a config file in your docs directory (or its parent). It supports the following formats, checked in priority order:
 
@@ -130,7 +130,7 @@ Introduction = "index.md"
 - `pull_interval`: Interval between pulls (e.g., `1h`, `30m`).
 - `cache_path`: Local directory to store the cloned repository.
 
-### 🌍 Environment Variables
+### Environment Variables
 
 - `DOCK_TITLE`: Override the project name shown in the nav.
 - `DOCK_THEME`: Your default vibe.

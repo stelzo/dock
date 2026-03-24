@@ -95,7 +95,7 @@ func locateCodeBlocks(blocks []CodeBlock, rendered string) []CodeBlock {
 		if startNeedle == "" && len(codeLines) > 0 {
 			startNeedle = strings.ToLower(codeLines[0])
 		}
-		
+
 		matchNeedle := startNeedle
 		if len(matchNeedle) > 30 {
 			matchNeedle = matchNeedle[:30]
@@ -134,20 +134,20 @@ func findCodeBlockEnd(rendered []string, start int, sourceContent string) int {
 	if len(codeLines) == 0 {
 		return start
 	}
-	
+
 	end := start
 	currentLineInCode := 0
 	currentLineInCode++
-	
+
 	for li := start + 1; li < len(rendered) && currentLineInCode < len(codeLines); li++ {
 		plain := strings.ToLower(ui.AnsiEscRe.ReplaceAllString(rendered[li], ""))
 		needle := strings.ToLower(codeLines[currentLineInCode])
-		
+
 		matchNeedle := needle
 		if len(matchNeedle) > 30 {
 			matchNeedle = matchNeedle[:30]
 		}
-		
+
 		if strings.Contains(plain, matchNeedle) {
 			end = li
 			currentLineInCode++
@@ -244,13 +244,13 @@ func ExtractLinks(md, currentFile, rendered string, entries []navigation.NavEntr
 }
 
 var (
-	admonitionRe = regexp.MustCompile(`^([?!]{3})\+?\s+(\w+)(?:\s+"([^"]*)")?$`)
-	tabRe        = regexp.MustCompile(`^={3}\s+"([^"]*)"`)
-	kbdRe        = regexp.MustCompile(`<kbd>(.*?)</kbd>`)
-	tildeRe      = regexp.MustCompile(`^(~~~+)(\w*).*$`)
-	imgAttrRe    = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)\s*\{[^}]*\}`)
-	imgPlainRe   = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
-	captionRe    = regexp.MustCompile(`^///\s*(?:caption)?`)
+	admonitionRe  = regexp.MustCompile(`^([?!]{3})\+?\s+(\w+)(?:\s+"([^"]*)")?$`)
+	tabRe         = regexp.MustCompile(`^={3}\s+"([^"]*)"`)
+	kbdRe         = regexp.MustCompile(`<kbd>(.*?)</kbd>`)
+	tildeRe       = regexp.MustCompile(`^(~~~+)(\w*).*$`)
+	imgAttrRe     = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)\s*\{[^}]*\}`)
+	imgPlainRe    = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
+	captionRe     = regexp.MustCompile(`^///\s*(?:caption)?`)
 	orderedItemRe = regexp.MustCompile(`^\d+[.)]\s+`)
 )
 

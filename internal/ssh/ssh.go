@@ -16,10 +16,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/log/v2"
 	"charm.land/wish/v2"
 	bm "charm.land/wish/v2/bubbletea"
 	wlogging "charm.land/wish/v2/logging"
-	"charm.land/log/v2"
 	"github.com/charmbracelet/ssh"
 	"golang.org/x/term"
 

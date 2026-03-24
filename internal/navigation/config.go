@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"charm.land/log/v2"
+	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
 
 	"codeberg.org/stelzo/dock/internal/config"
@@ -176,7 +176,7 @@ func LoadNavConfig(root string) []NavEntry {
 		cfg, err := parseConfig(cp, ext)
 		if err == nil && cfg != nil {
 			applyConfig(cfg)
-			
+
 			nav := cfg.Nav
 			if len(nav) == 0 {
 				nav = cfg.Project.Nav
@@ -212,7 +212,7 @@ func applyConfig(cfg *config.Config) {
 			config.DocsTitle = cfg.Project.SiteName
 		}
 	}
-	
+
 	if config.GitURL == "" {
 		if cfg.GitURL != "" {
 			config.GitURL = cfg.GitURL
@@ -220,7 +220,7 @@ func applyConfig(cfg *config.Config) {
 			config.GitURL = cfg.Project.GitURL
 		}
 	}
-	
+
 	if config.GitRef == "" {
 		if cfg.GitRef != "" {
 			config.GitRef = cfg.GitRef
@@ -228,7 +228,7 @@ func applyConfig(cfg *config.Config) {
 			config.GitRef = cfg.Project.GitRef
 		}
 	}
-	
+
 	if config.PullInterval == "" {
 		if cfg.PullInterval != "" {
 			config.PullInterval = cfg.PullInterval
@@ -236,7 +236,7 @@ func applyConfig(cfg *config.Config) {
 			config.PullInterval = cfg.Project.PullInterval
 		}
 	}
-	
+
 	if config.CachePath == "" {
 		if cfg.CachePath != "" {
 			config.CachePath = cfg.CachePath

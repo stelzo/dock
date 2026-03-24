@@ -12,8 +12,6 @@ import (
 	"image/png"
 	"io"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"time"
 
@@ -187,12 +185,11 @@ type Model struct {
 	Focus     string
 	ThemeIdx  int
 
-	CodeBlocks  []markdown.CodeBlock
-	CopyIdx     int
-	Links       []markdown.DocLink
-	LinkIdx     int
-	PendingCopy string
-	StatusMsg   string
+	CodeBlocks []markdown.CodeBlock
+	CopyIdx    int
+	Links      []markdown.DocLink
+	LinkIdx    int
+	StatusMsg  string
 
 	RawContent     string
 	SearchQuery    string
@@ -216,6 +213,8 @@ type Model struct {
 	ImageActive        bool
 	CodeOverlay        bool
 	CodeOverlaySrc     string
+	LinkOverlay        bool
+	LinkOverlaySrc     string
 	ImageOverlay       bool
 	ImageOverlaySrc    string
 	ImageOverlaySixel  string
@@ -304,6 +303,9 @@ func (m Model) getHint() string {
 	}
 	if m.CodeOverlay {
 		return " [code] esc/enter: close"
+	}
+	if m.LinkOverlay {
+		return " [link] esc/enter: close"
 	}
 	if m.CodeActive {
 		return fmt.Sprintf(" [code %d/%d] c/C: next/prev · enter/y: copy · esc: exit",
@@ -446,12 +448,9 @@ type docMsg struct {
 	imageRefs  []images.ImageRef
 }
 
-type clearCopyMsg struct{}
 type clearStatusMsg struct{}
 type clearGraphicsMsg struct{}
-type copyResultMsg struct {
-	ok bool
-}
+
 type imageOverlayMsg struct {
 	rendered string
 	sixel    string
@@ -633,26 +632,6 @@ func (m Model) ensureCursorVisible(space int) Model {
 	return m
 }
 
-func clearCopyCmd() tea.Cmd {
-	return func() tea.Msg { return clearCopyMsg{} }
-}
-
-func copyToClipboardCmd(text string, useOSC52 bool) tea.Cmd {
-	return func() tea.Msg {
-		if useOSC52 {
-			return copyResultMsg{ok: true}
-		}
-		if !useOSC52 && runtime.GOOS == "darwin" {
-			cmd := exec.Command("pbcopy")
-			cmd.Stdin = strings.NewReader(text)
-			if err := cmd.Run(); err == nil {
-				return copyResultMsg{ok: true}
-			}
-		}
-		return copyResultMsg{ok: false}
-	}
-}
-
 func highlightCodes(bg, fg string) (string, string) {
 	st := lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
@@ -735,6 +714,8 @@ func (m *Model) jumpToNav() tea.Cmd {
 	m.clearContentTargetModes()
 	m.CodeOverlay = false
 	m.CodeOverlaySrc = ""
+	m.LinkOverlay = false
+	m.LinkOverlaySrc = ""
 	m.ImageOverlay = false
 	m.ImageOverlaySrc = ""
 	m.ImageOverlaySixel = ""
@@ -859,6 +840,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ImageActive = false
 		m.CodeOverlay = false
 		m.CodeOverlaySrc = ""
+		m.LinkOverlay = false
+		m.LinkOverlaySrc = ""
 		m.ImageOverlay = false
 		m.ImageOverlaySrc = ""
 		m.ImageOverlaySixel = ""
@@ -885,17 +868,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.GsearchCursor = 0
 		}
 
-	case clearCopyMsg:
-		m.PendingCopy = ""
-
 	case clearStatusMsg:
 		m.StatusMsg = ""
-
-	case copyResultMsg:
-		if !msg.ok && m.PendingCopy == "" {
-			m.StatusMsg = "Clipboard copy unavailable"
-			cmds = append(cmds, statusCmd(2*time.Second))
-		}
 
 	case clearGraphicsMsg:
 		m.NeedsGraphicsClear = false
@@ -926,9 +900,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.StatusMsg = "Page not found in nav"
 				cmds = append(cmds, statusCmd(2*time.Second))
 			} else {
-				m.PendingCopy = lk.URL
-				m.StatusMsg = "✓ URL copied: " + ui.Truncate(lk.URL, 50)
-				cmds = append(cmds, clearCopyCmd(), statusCmd(4*time.Second))
+				m.LinkOverlay = true
+				m.LinkOverlaySrc = lk.URL
 			}
 		}
 
@@ -1339,6 +1312,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.CodeOverlay {
 					m.CodeOverlay = false
 					m.CodeOverlaySrc = ""
+				} else if m.LinkOverlay {
+					m.LinkOverlay = false
+					m.LinkOverlaySrc = ""
 				} else if m.ImageOverlay {
 					m.ImageOverlay = false
 					m.ImageOverlaySrc = ""
@@ -1347,13 +1323,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.NeedsGraphicsClear = true
 					cmds = append(cmds, clearGraphicsCmd())
 				} else if m.CodeActive && len(m.CodeBlocks) > 0 {
-					if m.SshSession != nil {
-						m.CodeOverlay = true
-						m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
-					} else {
-						m.StatusMsg = "✓ Copied code block to clipboard"
-						cmds = append(cmds, copyToClipboardCmd(m.CodeBlocks[m.CopyIdx].Content, false), clearCopyCmd(), statusCmd(2*time.Second))
-					}
+					m.CodeOverlay = true
+					m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
 				} else if m.LinkActive && len(m.Links) > 0 {
 					lk := m.Links[m.LinkIdx]
 					if lk.IsInternal && lk.NavIdx >= 0 {
@@ -1365,11 +1336,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.StatusMsg = "Page not found in nav"
 						cmds = append(cmds, statusCmd(2*time.Second))
 					} else {
-						if m.SshSession != nil {
-							m.PendingCopy = lk.URL
-						}
-						m.StatusMsg = "✓ URL copied: " + ui.Truncate(lk.URL, 50)
-						cmds = append(cmds, copyToClipboardCmd(lk.URL, m.SshSession != nil), clearCopyCmd(), statusCmd(4*time.Second))
+						m.LinkOverlay = true
+						m.LinkOverlaySrc = lk.URL
 					}
 				} else if m.ImageActive {
 					cmds = append(cmds, m.loadImageOverlay())
@@ -1380,16 +1348,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "y":
 				if m.CodeActive && len(m.CodeBlocks) > 0 {
-					if m.SshSession != nil {
-						m.PendingCopy = m.CodeBlocks[m.CopyIdx].Content
-					}
-					m.StatusMsg = "✓ Copied code block to clipboard"
-					cmds = append(cmds, copyToClipboardCmd(m.CodeBlocks[m.CopyIdx].Content, m.SshSession != nil), clearCopyCmd(), statusCmd(2*time.Second))
+					m.CodeOverlay = true
+					m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
 				}
 			case "esc":
 				if m.CodeOverlay {
 					m.CodeOverlay = false
 					m.CodeOverlaySrc = ""
+				} else if m.LinkOverlay {
+					m.LinkOverlay = false
+					m.LinkOverlaySrc = ""
 				} else if m.ImageOverlay {
 					m.ImageOverlay = false
 					m.ImageOverlaySrc = ""
@@ -1579,6 +1547,14 @@ func (m Model) renderCodeOverlay() string {
 		Render(m.CodeOverlaySrc)
 }
 
+func (m Model) renderLinkOverlay() string {
+	lm := m.layoutMetrics()
+	return lipgloss.NewStyle().
+		Width(lm.safeW).
+		Height(m.Height).
+		Render(m.LinkOverlaySrc)
+}
+
 func (m Model) View() tea.View {
 	if !m.Ready {
 		v := tea.NewView("\nInitializing…\n")
@@ -1607,9 +1583,8 @@ func (m Model) View() tea.View {
 	var layout string
 	var imageInject string
 
-	if m.CodeOverlay {
-		layout = m.renderCodeOverlay()
-		bodyLines := strings.Split(layout, "\n")
+	renderFullScreenOverlay := func(content string) tea.View {
+		bodyLines := strings.Split(content, "\n")
 		bodyMaxLines := max(1, m.Height-1)
 		if len(bodyLines) > bodyMaxLines {
 			bodyLines = bodyLines[:bodyMaxLines]
@@ -1630,6 +1605,13 @@ func (m Model) View() tea.View {
 		v.AltScreen = true
 		v.MouseMode = tea.MouseModeCellMotion
 		return v
+	}
+
+	if m.CodeOverlay {
+		return renderFullScreenOverlay(m.renderCodeOverlay())
+	}
+	if m.LinkOverlay {
+		return renderFullScreenOverlay(m.renderLinkOverlay())
 	}
 
 	containerW := lm.contentOuterW
@@ -1680,11 +1662,6 @@ func (m Model) View() tea.View {
 	out := ui.OverlayAtLine(body, status, 0, m.Height-1)
 	if imageInject != "" {
 		out += m.wrapTmux(imageInject)
-	}
-
-	if m.PendingCopy != "" {
-		b64 := base64.StdEncoding.EncodeToString([]byte(m.PendingCopy))
-		out = m.wrapTmux("\x1b]52;c;"+b64+"\x07") + out
 	}
 
 	out = m.wrapTmux("\x1b[?2026h") + out + m.wrapTmux("\x1b[?2026l")

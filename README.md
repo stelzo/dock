@@ -1,11 +1,17 @@
 # Dock
 
-Dock is an SSH-based Markdown documentation viewer that turns your terminal into a cozy reading nook for when you don't want to open a bloated, corporate, AI-infected mini OS called _browser_ to view or navigate through markdown files. Dock makes your `.md` files look *stunning*, just like Charm's `glow` but with some extra steps.
+Dock is an SSH-based Markdown browser that turns your terminal into a cozy reading nook for when you don't want to open a bloated, corporate, AI-infected mini OS called _webbrowser_ to view or navigate through markdown files. Dock makes your `.md` files look *stunning*, just like Charm's `glow` but with some extra steps.
+
+Try it out, maybe you'll like it!
+
+```bash
+ssh marina@steado.tech
+```
 
 **Why would you do this?**
-- **Keyboard first:** Stay in the terminal. No distractions. Just _beautiful_ docs. Mouse is still supported though.
-- **SSH is cool:** No bloated browser but you still get a browser like feel with all information and probably all functionality the web docs would give you without installing anything.
-- **Eye Candy:** Powered by the legendary charm libraries and kitty/sixel terminal image protocols! If you have a smooth terminal setup, dock will just fit in. It comes with gorgeous themes (Nord, Dracula, Tokyo Night, and more!) to keep your eyes happy. Just use it as your username. Seriously. `ssh dracula@your-docs` just works.
+- **Keyboard first:** Stay in the terminal. No distractions. Just _beautiful_ docs. Your mouse is still supported 🐁
+- **SSH is cool:** No bloated browser but you still get all information and probably all functionality the web docs would give you without installing anything.
+- **Eye Candy ✨:** Powered by the glamourous charm libraries and kitty/sixel terminal image protocols! If you have a smooth terminal setup, dock will just fit in. It comes with gorgeous themes (Nord, Dracula, Tokyo Night, and more!) to keep your eyes happy. Just use it as a subdomain. Seriously. `ssh pink.marina@steado.tech` just works.
 
 ---
 

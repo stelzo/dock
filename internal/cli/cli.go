@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
+	"charm.land/log/v2"
 	"codeberg.org/stelzo/dock/internal/config"
 	"codeberg.org/stelzo/dock/internal/navigation"
 	dockssh "codeberg.org/stelzo/dock/internal/ssh"
 	"codeberg.org/stelzo/dock/internal/themes"
 	"codeberg.org/stelzo/dock/internal/tui"
-	"charm.land/log/v2"
 	"github.com/spf13/cobra"
 )
 

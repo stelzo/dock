@@ -52,14 +52,14 @@ func Init() {
 			IgnoredDirs[d] = true
 		}
 	}
-	
+
 	DocsTitle = os.Getenv("DOCK_TITLE")
 	if v := os.Getenv("DOCK_THEME"); v != "" {
 		if i, ok := themes.IdxFromName(v); ok {
 			DefaultThemeIdx = i
 		}
 	}
-	
+
 	GitURL = os.Getenv("DOCK_GIT_URL")
 	GitRef = os.Getenv("DOCK_GIT_REF")
 	PullInterval = os.Getenv("DOCK_PULL_INTERVAL")

@@ -4,6 +4,8 @@ Dock is an SSH-based Markdown browser that turns your terminal into a cozy readi
 
 Try it out, maybe you'll like it!
 
+![Made with VHS](https://vhs.charm.sh/vhs-7lleQ1op64Ka3k6oaGbgzh.gif)
+
 ```bash
 ssh marina@steado.tech
 ```

@@ -1,6 +1,6 @@
 # Dock
 
-Dock is an SSH-based Markdown browser that turns your terminal into a cozy reading nook for when you don't want to open a bloated, corporate, AI-infected mini OS called _webbrowser_ to view or navigate through markdown files. Dock makes your `.md` files look *stunning*, just like Charm's `glow` but with some extra steps.
+Dock is an SSH-based Markdown browser that turns your terminal into a cozy reading nook for when you don't want to open a bloated, corporate, AI-infected mini OS called _Web Browser_ to view or navigate through Markdown files. Dock makes your `.md` files look *stunning* - just like Charm's `glow`, but with some extra steps.
 
 Try it out, maybe you'll like it!
 

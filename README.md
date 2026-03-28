@@ -25,7 +25,7 @@ ssh docs.project.com
 For running dock locally or as a SSH server for your own docs, install via Go:
 
 ```bash
-go install codeberg.org/stelzo/dock@latest
+go install go.steado.tech/dock@latest
 ```
 
 ---

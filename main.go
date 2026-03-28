@@ -1,8 +1,8 @@
 package main
 
 import (
-	"codeberg.org/stelzo/dock/internal/cli"
-	"codeberg.org/stelzo/dock/internal/config"
+	"go.steado.tech/dock/internal/cli"
+	"go.steado.tech/dock/internal/config"
 )
 
 func main() {

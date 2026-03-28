@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"codeberg.org/stelzo/dock/internal/graphics"
+	"go.steado.tech/dock/internal/graphics"
 )
 
 func TestStripGraphicsResponsesDetectsSixelAndKitty(t *testing.T) {
@@ -71,8 +71,8 @@ func TestStripGraphicsResponsesPreservesNonGraphicsCSIAndKittyLikeData(t *testin
 
 func TestKittyImagePayloadPNGChunksAndTerminates(t *testing.T) {
 	img := image.NewRGBA(image.Rect(0, 0, 180, 120))
-	for y := 0; y < 120; y++ {
-		for x := 0; x < 180; x++ {
+	for y := range 120 {
+		for x := range 180 {
 			img.SetRGBA(x, y, color.RGBA{R: uint8(x), G: uint8(y), B: uint8((x + y) % 255), A: 255})
 		}
 	}

@@ -27,14 +27,14 @@ import (
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/term"
 
-	"codeberg.org/stelzo/dock/internal/config"
-	"codeberg.org/stelzo/dock/internal/graphics"
-	"codeberg.org/stelzo/dock/internal/images"
-	"codeberg.org/stelzo/dock/internal/markdown"
-	"codeberg.org/stelzo/dock/internal/navigation"
-	"codeberg.org/stelzo/dock/internal/search"
-	"codeberg.org/stelzo/dock/internal/themes"
-	"codeberg.org/stelzo/dock/internal/ui"
+	"go.steado.tech/dock/internal/config"
+	"go.steado.tech/dock/internal/graphics"
+	"go.steado.tech/dock/internal/images"
+	"go.steado.tech/dock/internal/markdown"
+	"go.steado.tech/dock/internal/navigation"
+	"go.steado.tech/dock/internal/search"
+	"go.steado.tech/dock/internal/themes"
+	"go.steado.tech/dock/internal/ui"
 )
 
 type GraphicsReader struct {

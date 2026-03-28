@@ -10,12 +10,12 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"codeberg.org/stelzo/dock/internal/config"
-	"codeberg.org/stelzo/dock/internal/navigation"
-	dockssh "codeberg.org/stelzo/dock/internal/ssh"
-	"codeberg.org/stelzo/dock/internal/themes"
-	"codeberg.org/stelzo/dock/internal/tui"
 	"github.com/spf13/cobra"
+	"go.steado.tech/dock/internal/config"
+	"go.steado.tech/dock/internal/navigation"
+	dockssh "go.steado.tech/dock/internal/ssh"
+	"go.steado.tech/dock/internal/themes"
+	"go.steado.tech/dock/internal/tui"
 )
 
 var (

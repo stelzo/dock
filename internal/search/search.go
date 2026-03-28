@@ -7,8 +7,8 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"codeberg.org/stelzo/dock/internal/navigation"
-	"codeberg.org/stelzo/dock/internal/ui"
+	"go.steado.tech/dock/internal/navigation"
+	"go.steado.tech/dock/internal/ui"
 )
 
 const (
@@ -319,7 +319,7 @@ func GlobalSearch(entries []navigation.NavEntry, query string) tea.Cmd {
 				continue
 			}
 			hits := 0
-			for _, line := range strings.Split(string(raw), "\n") {
+			for line := range strings.SplitSeq(string(raw), "\n") {
 				if LineMatchesAll(line, words) {
 					hits++
 				}

@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"charm.land/lipgloss/v2"
-	"codeberg.org/stelzo/dock/internal/navigation"
-	"codeberg.org/stelzo/dock/internal/ui"
+	"go.steado.tech/dock/internal/navigation"
+	"go.steado.tech/dock/internal/ui"
 )
 
 func plainView(s string) []string {

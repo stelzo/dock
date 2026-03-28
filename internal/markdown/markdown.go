@@ -8,9 +8,9 @@ import (
 
 	"charm.land/glamour/v2"
 	glamouransi "charm.land/glamour/v2/ansi"
-	"codeberg.org/stelzo/dock/internal/navigation"
-	"codeberg.org/stelzo/dock/internal/themes"
-	"codeberg.org/stelzo/dock/internal/ui"
+	"go.steado.tech/dock/internal/navigation"
+	"go.steado.tech/dock/internal/themes"
+	"go.steado.tech/dock/internal/ui"
 )
 
 const (
@@ -120,7 +120,7 @@ func locateCodeBlocks(blocks []CodeBlock, rendered string) []CodeBlock {
 
 func nonEmptyLines(s string) []string {
 	var out []string
-	for _, line := range strings.Split(s, "\n") {
+	for line := range strings.SplitSeq(s, "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			out = append(out, line)
@@ -214,8 +214,8 @@ func ExtractLinks(md, currentFile, rendered string, entries []navigation.NavEntr
 		seen[rawURL] = true
 		lk := DocLink{Label: text, RawText: text, URL: rawURL, NavIdx: -1, Line: -1}
 		mdPath := rawURL
-		if idx := strings.IndexByte(rawURL, '#'); idx != -1 {
-			mdPath = rawURL[:idx]
+		if before, _, ok := strings.Cut(rawURL, "#"); ok {
+			mdPath = before
 		}
 		if strings.HasSuffix(mdPath, ".md") && !strings.HasPrefix(mdPath, "http") {
 			resolved := filepath.Clean(filepath.Join(filepath.Dir(currentFile), mdPath))

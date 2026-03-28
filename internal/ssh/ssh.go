@@ -23,13 +23,13 @@ import (
 	"github.com/charmbracelet/ssh"
 	"golang.org/x/term"
 
-	"codeberg.org/stelzo/dock/internal/config"
-	"codeberg.org/stelzo/dock/internal/graphics"
-	"codeberg.org/stelzo/dock/internal/markdown"
-	"codeberg.org/stelzo/dock/internal/navigation"
-	"codeberg.org/stelzo/dock/internal/search"
-	"codeberg.org/stelzo/dock/internal/themes"
-	"codeberg.org/stelzo/dock/internal/tui"
+	"go.steado.tech/dock/internal/config"
+	"go.steado.tech/dock/internal/graphics"
+	"go.steado.tech/dock/internal/markdown"
+	"go.steado.tech/dock/internal/navigation"
+	"go.steado.tech/dock/internal/search"
+	"go.steado.tech/dock/internal/themes"
+	"go.steado.tech/dock/internal/tui"
 )
 
 type themeCtxKey struct{}
@@ -131,7 +131,7 @@ func CmdSearch(stdout, stderr io.Writer, docs string, args []string) int {
 			continue
 		}
 		count := 0
-		for _, line := range strings.Split(string(raw), "\n") {
+		for line := range strings.SplitSeq(string(raw), "\n") {
 			if search.LineMatchesAll(line, words) {
 				count++
 			}
@@ -323,7 +323,7 @@ func splitInterspersed(fs *flag.FlagSet, args []string) (flagArgs, positional []
 			continue
 		}
 		name := strings.TrimLeft(arg, "-")
-		if idx := strings.IndexByte(name, '='); idx != -1 {
+		if found := strings.Contains(name, "="); found {
 			flagArgs = append(flagArgs, arg)
 			i++
 			continue

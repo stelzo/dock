@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"charm.land/log/v2"
-	"codeberg.org/stelzo/dock/internal/themes"
+	"go.steado.tech/dock/internal/themes"
 )
 
 var (
@@ -21,23 +21,23 @@ var (
 const Version = "0.1.0"
 
 type Config struct {
-	SiteName     string        `yaml:"site_name" toml:"site_name"`
-	Nav          []interface{} `yaml:"nav" toml:"nav"`
-	DocsDir      string        `yaml:"docs_dir" toml:"docs_dir"`
-	DockDir      string        `yaml:"dock_dir" toml:"dock_dir"`
-	GitURL       string        `yaml:"git_url" toml:"git_url"`
-	GitRef       string        `yaml:"git_ref" toml:"git_ref"`
-	PullInterval string        `yaml:"pull_interval" toml:"pull_interval"`
-	CachePath    string        `yaml:"cache_path" toml:"cache_path"`
+	SiteName     string `yaml:"site_name" toml:"site_name"`
+	Nav          []any  `yaml:"nav" toml:"nav"`
+	DocsDir      string `yaml:"docs_dir" toml:"docs_dir"`
+	DockDir      string `yaml:"dock_dir" toml:"dock_dir"`
+	GitURL       string `yaml:"git_url" toml:"git_url"`
+	GitRef       string `yaml:"git_ref" toml:"git_ref"`
+	PullInterval string `yaml:"pull_interval" toml:"pull_interval"`
+	CachePath    string `yaml:"cache_path" toml:"cache_path"`
 	Project      struct {
-		SiteName     string        `toml:"site_name"`
-		Nav          []interface{} `toml:"nav"`
-		DocsDir      string        `toml:"docs_dir"`
-		DockDir      string        `toml:"dock_dir"`
-		GitURL       string        `toml:"git_url"`
-		GitRef       string        `toml:"git_ref"`
-		PullInterval string        `toml:"pull_interval"`
-		CachePath    string        `toml:"cache_path"`
+		SiteName     string `toml:"site_name"`
+		Nav          []any  `toml:"nav"`
+		DocsDir      string `toml:"docs_dir"`
+		DockDir      string `toml:"dock_dir"`
+		GitURL       string `toml:"git_url"`
+		GitRef       string `toml:"git_ref"`
+		PullInterval string `toml:"pull_interval"`
+		CachePath    string `toml:"cache_path"`
 	} `toml:"project"`
 }
 
@@ -47,7 +47,7 @@ func Init() {
 		ignoreEnv = "assets,stylesheets"
 	}
 	IgnoredDirs = make(map[string]bool)
-	for _, d := range strings.Split(ignoreEnv, ",") {
+	for d := range strings.SplitSeq(ignoreEnv, ",") {
 		if d = strings.TrimSpace(d); d != "" {
 			IgnoredDirs[d] = true
 		}

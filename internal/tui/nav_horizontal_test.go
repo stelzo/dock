@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"codeberg.org/stelzo/dock/internal/navigation"
+	"go.steado.tech/dock/internal/navigation"
 )
 
 func TestClipHorizontal(t *testing.T) {

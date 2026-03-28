@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"codeberg.org/stelzo/dock/internal/themes"
-	"codeberg.org/stelzo/dock/internal/ui"
+	"go.steado.tech/dock/internal/themes"
+	"go.steado.tech/dock/internal/ui"
 )
 
 func TestEffectiveWrapWidthAccountsForQuoteTokenOverhead(t *testing.T) {

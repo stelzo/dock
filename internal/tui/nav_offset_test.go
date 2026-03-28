@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"codeberg.org/stelzo/dock/internal/navigation"
+	"go.steado.tech/dock/internal/navigation"
 )
 
 func TestEnsureCursorVisibleClampsOffset(t *testing.T) {

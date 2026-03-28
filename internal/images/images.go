@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"codeberg.org/stelzo/dock/internal/ui"
+	"go.steado.tech/dock/internal/ui"
 )
 
 type ImageRef struct {

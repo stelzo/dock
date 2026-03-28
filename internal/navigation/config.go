@@ -13,7 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
 
-	"codeberg.org/stelzo/dock/internal/config"
+	"go.steado.tech/dock/internal/config"
 )
 
 var syncMap = make(map[string]bool)
@@ -246,7 +246,7 @@ func applyConfig(cfg *config.Config) {
 	}
 }
 
-func buildFromConfig(root string, nav []interface{}, depth int) []NavEntry {
+func buildFromConfig(root string, nav []any, depth int) []NavEntry {
 	var out []NavEntry
 	for _, item := range nav {
 		switch v := item.(type) {
@@ -257,7 +257,7 @@ func buildFromConfig(root string, nav []interface{}, depth int) []NavEntry {
 				FilePath: p,
 				Depth:    depth,
 			})
-		case map[string]interface{}:
+		case map[string]any:
 			keys := make([]string, 0, len(v))
 			for k := range v {
 				keys = append(keys, k)
@@ -274,18 +274,18 @@ func buildFromConfig(root string, nav []interface{}, depth int) []NavEntry {
 						FilePath: p,
 						Depth:    depth,
 					})
-				case []interface{}:
+				case []any:
 					out = append(out, NavEntry{
 						Title: title,
 						Depth: depth,
 					})
 					out = append(out, buildFromConfig(root, vv, depth+1)...)
-				case map[string]interface{}:
+				case map[string]any:
 					out = append(out, NavEntry{
 						Title: title,
 						Depth: depth,
 					})
-					out = append(out, buildFromConfig(root, []interface{}{vv}, depth+1)...)
+					out = append(out, buildFromConfig(root, []any{vv}, depth+1)...)
 				}
 			}
 		}

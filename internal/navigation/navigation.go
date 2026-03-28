@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"codeberg.org/stelzo/dock/internal/config"
+	"go.steado.tech/dock/internal/config"
 )
 
 type NavEntry struct {
@@ -92,7 +92,7 @@ func FileTitle(path string) string {
 
 func TitleCase(s string) string {
 	var words []string
-	for _, w := range strings.Fields(strings.ReplaceAll(s, "_", " ")) {
+	for w := range strings.FieldsSeq(strings.ReplaceAll(s, "_", " ")) {
 		if len(w) > 0 {
 			words = append(words, strings.ToUpper(w[:1])+w[1:])
 		}

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"codeberg.org/stelzo/dock/internal/navigation"
+	"go.steado.tech/dock/internal/navigation"
 )
 
 // Reproduces nav movement with interleaved section headers.

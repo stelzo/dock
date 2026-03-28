@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 
+	"charm.land/log/v2"
 	"codeberg.org/stelzo/dock/internal/themes"
 )
 
@@ -63,4 +64,8 @@ func Init() {
 	GitRef = os.Getenv("DOCK_GIT_REF")
 	PullInterval = os.Getenv("DOCK_PULL_INTERVAL")
 	CachePath = os.Getenv("DOCK_CACHE_PATH")
+
+	if os.Getenv("DOCK_DEBUG") == "1" {
+		log.SetLevel(log.DebugLevel)
+	}
 }

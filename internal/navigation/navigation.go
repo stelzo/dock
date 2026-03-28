@@ -26,12 +26,6 @@ func BuildNav(root string) []NavEntry {
 }
 
 func walkDir(root, dir string, depth int, out *[]NavEntry) {
-	if depth > 0 {
-		*out = append(*out, NavEntry{
-			Title: TitleCase(filepath.Base(dir)),
-			Depth: depth - 1,
-		})
-	}
 	fis, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -53,21 +47,32 @@ func walkDir(root, dir string, depth int, out *[]NavEntry) {
 		}
 		return ni < nj
 	})
+	var children []NavEntry
 	for _, fi := range fis {
 		p := filepath.Join(dir, fi.Name())
 		if fi.IsDir() {
 			if config.IgnoredDirs[fi.Name()] {
 				continue
 			}
-			walkDir(root, p, depth+1, out)
+			walkDir(root, p, depth+1, &children)
 		} else if strings.HasSuffix(fi.Name(), ".md") {
-			*out = append(*out, NavEntry{
+			children = append(children, NavEntry{
 				Title:    FileTitle(p),
 				FilePath: p,
 				Depth:    depth,
 			})
 		}
 	}
+	if len(children) == 0 {
+		return
+	}
+	if depth > 0 {
+		*out = append(*out, NavEntry{
+			Title: TitleCase(filepath.Base(dir)),
+			Depth: depth - 1,
+		})
+	}
+	*out = append(*out, children...)
 }
 
 func FileTitle(path string) string {

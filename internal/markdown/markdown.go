@@ -330,8 +330,7 @@ var (
 	tabRe         = regexp.MustCompile(`^={3}\s+"([^"]*)"`)
 	kbdRe         = regexp.MustCompile(`<kbd>(.*?)</kbd>`)
 	tildeRe       = regexp.MustCompile(`^(~~~+)(\w*).*$`)
-	imgAttrRe     = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)\s*\{[^}]*\}`)
-	imgPlainRe    = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
+	imgRe         = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)(?:\s*\{[^}]*\})?`)
 	captionRe     = regexp.MustCompile(`^///\s*(?:caption)?`)
 	orderedItemRe = regexp.MustCompile(`^\d+[.)]\s+`)
 )
@@ -438,14 +437,8 @@ func PreprocessMarkdown(src string) string {
 			continue
 		}
 
-		ln = imgAttrRe.ReplaceAllStringFunc(ln, func(s string) string {
-			if m := imgAttrRe.FindStringSubmatch(s); m[1] != "" {
-				return "[Image: " + m[1] + "]"
-			}
-			return ""
-		})
-		ln = imgPlainRe.ReplaceAllStringFunc(ln, func(s string) string {
-			if m := imgPlainRe.FindStringSubmatch(s); m[1] != "" {
+		ln = imgRe.ReplaceAllStringFunc(ln, func(s string) string {
+			if m := imgRe.FindStringSubmatch(s); m[1] != "" {
 				return "[Image: " + m[1] + "]"
 			}
 			return ""

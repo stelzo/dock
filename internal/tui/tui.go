@@ -2,16 +2,17 @@ package tui
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
 	"image/draw"
 	_ "image/gif"
 	_ "image/jpeg"
-	"image/png"
+	_ "image/png"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"charm.land/log/v2"
 	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/x/ansi/kitty"
 	"github.com/charmbracelet/x/mosaic"
 	sixel "github.com/mattn/go-sixel"
 	xdraw "golang.org/x/image/draw"
@@ -38,6 +40,7 @@ import (
 type GraphicsReader struct {
 	R io.Reader
 	P *tea.Program
+	b string
 }
 
 func (g *GraphicsReader) Fd() uintptr {
@@ -48,6 +51,16 @@ func (g *GraphicsReader) Fd() uintptr {
 		return f.Fd()
 	}
 	return 0
+}
+
+func (g *GraphicsReader) Name() string {
+	type namer interface {
+		Name() string
+	}
+	if f, ok := g.R.(namer); ok {
+		return f.Name()
+	}
+	return ""
 }
 
 func (g *GraphicsReader) Write(p []byte) (int, error) {
@@ -70,53 +83,86 @@ func (g *GraphicsReader) Read(p []byte) (int, error) {
 		return n, err
 	}
 
-	clean := string(p[:n])
-	msg := graphics.GraphicsMsg{}
-	found := false
-
-	for {
-		start := strings.Index(clean, "\x1b[?")
-		if start == -1 {
-			start = strings.Index(clean, "\x1b[")
-		}
-		if start == -1 {
-			break
-		}
-		end := strings.IndexByte(clean[start:], 'c')
-		if end == -1 {
-			break
-		}
-		res := clean[start : start+end+1]
-		if strings.Contains(res, ";4") || strings.Contains(res, "?4") {
-			msg.Sixel = true
-		}
-		clean = clean[:start] + clean[start+end+1:]
-		found = true
-	}
-
-	for {
-		start := strings.Index(clean, "\x1b_G")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(clean[start:], "\x1b\\")
-		if end == -1 {
-			break
-		}
-		res := clean[start : start+end+2]
-		if strings.Contains(res, "OK") {
-			msg.Kitty = true
-		}
-		clean = clean[:start] + clean[start+end+2:]
-		found = true
-	}
-
+	clean, msg, found, pending := stripGraphicsResponses(g.b + string(p[:n]))
+	g.b = pending
 	if found {
 		g.P.Send(msg)
-		newN := copy(p, []byte(clean))
-		return newN, err
 	}
-	return n, err
+	return copy(p, clean), err
+}
+
+func stripGraphicsResponses(in string) (clean string, msg graphics.GraphicsMsg, found bool, pending string) {
+	const (
+		daPrefix    = "\x1b["
+		kittyPrefix = "\x1b_G"
+	)
+
+	var out strings.Builder
+	pos := 0
+	for pos < len(in) {
+		daIdx := strings.Index(in[pos:], daPrefix)
+		if daIdx >= 0 {
+			daIdx += pos
+		}
+		kittyIdx := strings.Index(in[pos:], kittyPrefix)
+		if kittyIdx >= 0 {
+			kittyIdx += pos
+		}
+
+		var start int
+		kind := ""
+		switch {
+		case daIdx >= 0 && (kittyIdx == -1 || daIdx < kittyIdx):
+			start = daIdx
+			kind = "da"
+		case kittyIdx >= 0:
+			start = kittyIdx
+			kind = "kitty"
+		default:
+			out.WriteString(in[pos:])
+			return out.String(), msg, found, ""
+		}
+
+		out.WriteString(in[pos:start])
+		rest := in[start:]
+
+		switch kind {
+		case "da":
+			if !strings.HasPrefix(rest, "\x1b[?") {
+				out.WriteByte(rest[0])
+				pos = start + 1
+				continue
+			}
+			end := strings.IndexByte(rest, 'c')
+			if end == -1 {
+				return out.String(), msg, found, rest
+			}
+			res := rest[:end+1]
+			if strings.Contains(res, ";4") || strings.Contains(res, "?4") {
+				msg.Sixel = true
+				found = true
+				pos = start + end + 1
+				continue
+			}
+			out.WriteString(res)
+			pos = start + end + 1
+		case "kitty":
+			end := strings.Index(rest, "\x1b\\")
+			if end == -1 {
+				return out.String(), msg, found, rest
+			}
+			res := rest[:end+2]
+			if strings.Contains(res, "OK") {
+				msg.Kitty = true
+				found = true
+				pos = start + end + 2
+				continue
+			}
+			out.WriteString(res)
+			pos = start + end + 2
+		}
+	}
+	return out.String(), msg, found, ""
 }
 
 func Run(docs string) {
@@ -138,15 +184,17 @@ func Run(docs string) {
 			m.SixelSupported = graphics.IsSixelTerminal(termEnv)
 		}
 		if !m.KittySupported {
-			m.KittySupported = graphics.IsKittyTerminal(termEnv)
+			m.KittySupported = graphics.IsKittyTerminal(termEnv) ||
+				graphics.IsKittyTerminal(os.Getenv("TERM_PROGRAM")) ||
+				os.Getenv("KITTY_WINDOW_ID") != ""
 		}
 	}
 
 	m.UpdateCellPix()
 
-	gr := &GraphicsReader{R: os.Stdin}
-	p := tea.NewProgram(m, tea.WithInput(gr))
-	gr.P = p
+	p := tea.NewProgram(m)
+
+	go watchFiles(docs, p)
 
 	if _, err := p.Run(); err != nil {
 		log.Fatal("TUI error", "err", err)
@@ -155,6 +203,7 @@ func Run(docs string) {
 
 const (
 	preferredNavInnerW = 26
+	helpPanelHeight    = 7
 )
 
 type layoutMetrics struct {
@@ -169,21 +218,23 @@ type layoutMetrics struct {
 	contentOuterX int
 	contentOuterW int
 	contentInnerX int
+	helpPanelH    int
 	contentInnerY int
 }
 
 type Model struct {
-	Docs      string
-	Entries   []navigation.NavEntry
-	Cursor    int
-	NavOffset int
-	NavHidden bool
-	Vp        viewport.Model
-	Width     int
-	Height    int
-	Ready     bool
-	Focus     string
-	ThemeIdx  int
+	Docs       string
+	Entries    []navigation.NavEntry
+	Cursor     int
+	NavOffset  int
+	NavXOffset int
+	NavHidden  bool
+	Vp         viewport.Model
+	Width      int
+	Height     int
+	Ready      bool
+	Focus      string
+	ThemeIdx   int
 
 	CodeBlocks []markdown.CodeBlock
 	CopyIdx    int
@@ -202,12 +253,12 @@ type Model struct {
 	GsearchCursor  int
 
 	PsearchQuery   string
-	PsearchResults []int // navIdx of matching entries
+	PsearchResults []int
 	PsearchCursor  int
 	DocSeq         uint64
 
 	NavHistory     []navHistEntry
-	RestoreYOffset int // -1 means no restore
+	RestoreYOffset int
 
 	ImageRefs          []images.ImageRef
 	ImageIdx           int
@@ -259,11 +310,18 @@ func NewModel(docs string, w, h int) Model {
 		ThemeIdx:       config.DefaultThemeIdx,
 		RestoreYOffset: -1,
 	}
+	fileCount := 0
 	for i, e := range entries {
 		if e.FilePath != "" {
-			m.Cursor = i
-			break
+			if fileCount == 0 {
+				m.Cursor = i
+			}
+			fileCount++
 		}
+	}
+	if fileCount == 1 {
+		m.NavHidden = true
+		m.Focus = "content"
 	}
 	if m.Ready {
 		m.Vp = viewport.New(viewport.WithWidth(m.vpW()), viewport.WithHeight(m.vpH()))
@@ -289,118 +347,191 @@ func (m Model) wrapScreen(s string) string {
 	return "\x1bP" + s + "\x1b\\"
 }
 
+func (m Model) wrapGraphics(s string) string {
+	if m.IsTmux {
+		return m.wrapTmux(s)
+	}
+	if m.IsScreen {
+		return m.wrapScreen(s)
+	}
+	return s
+}
+
 func (m Model) vpW() int {
 	return m.layoutMetrics().vpW
 }
 
-func (m Model) getHint() string {
-	if m.StatusMsg != "" {
-		return " " + m.StatusMsg
-	}
-	if m.Focus == "search" {
-		h := " /" + m.SearchQuery + "█"
+func (m Model) statusLeft() string {
+	switch {
+	case m.StatusMsg != "":
+		return m.StatusMsg
+	case m.Focus == "search":
+		s := "/" + m.SearchQuery + "█"
 		if len(m.SearchMatches) > 0 {
-			h += fmt.Sprintf("  [%d/%d]", m.SearchMatchIdx+1, len(m.SearchMatches))
+			s += fmt.Sprintf("  [%d/%d]", m.SearchMatchIdx+1, len(m.SearchMatches))
 		} else if m.SearchQuery != "" {
-			h += "  [no matches]"
-		} else {
-			h += "  type to search · esc cancel"
+			s += "  no matches"
 		}
-		return h
-	}
-	if m.Focus == "pagesearch" {
-		return " ↑↓/jk: select · enter: jump · esc: cancel"
-	}
-	if m.Focus == "gsearch" {
-		return " ↑↓/jk: select · enter: open · esc: cancel"
-	}
-	if m.HelpOverlay {
-		return " [help] esc/enter/?: close"
-	}
-	if m.ImageOverlay {
-		return fmt.Sprintf(" [%d/%d] %s · enter/esc: close",
-			m.ImageIdx+1, len(m.ImageRefs), m.ImageRefs[m.ImageIdx].Alt)
-	}
-	if m.CodeOverlay {
-		return " [code] esc/enter: close"
-	}
-	if m.LinkOverlay {
-		return " [link] esc/enter: close"
-	}
-	if m.CodeActive {
-		return fmt.Sprintf(" [code %d/%d] c/C: next/prev · enter/y: copy · esc: exit",
-			m.CopyIdx+1, len(m.CodeBlocks))
-	}
-	if m.LinkActive {
+		return s
+	case m.Focus == "pagesearch":
+		return m.statusLeftBase()
+	case m.Focus == "gsearch":
+		return m.statusLeftBase()
+	case m.Focus == "theme":
+		return "Theme · " + themes.Themes[m.ThemeIdx].Name
+	case m.CodeActive:
+		return fmt.Sprintf("Code  %d/%d", m.CopyIdx+1, len(m.CodeBlocks))
+	case m.LinkActive:
 		hint := "enter: open"
 		if m.LinkIdx < len(m.Links) && !m.Links[m.LinkIdx].IsInternal {
 			hint = "enter: show URL"
 		}
-		return fmt.Sprintf(" [link %d/%d] l/L: next/prev · %s · esc: exit",
-			m.LinkIdx+1, len(m.Links), hint)
-	}
-	if m.ImageActive {
-		return fmt.Sprintf(" [image %d/%d] i: next · I: prev · enter: show · esc: exit image nav",
-			m.ImageIdx+1, len(m.ImageRefs))
-	}
-	if m.SearchActive {
-		return fmt.Sprintf(" /%s  [%d/%d] · n: next · N: prev · esc: clear",
-			m.SearchQuery, m.SearchMatchIdx+1, len(m.SearchMatches))
-	}
-
-	var parts []string
-	switch m.Focus {
-	case "nav":
-		parts = []string{
-			"↑↓/jk\u00A0navigate",
-			"p:\u00A0page\u00A0search",
-			"/:\u00A0global\u00A0search",
-			"tab:\u00A0content",
-			"space:\u00A0nav",
-			"\\:\u00A0hide\u00A0nav",
-			"t:\u00A0theme",
-			"q\u00A0quit",
-		}
-	case "theme":
-		parts = []string{"↑↓/jk", "enter\u00A0apply", "esc\u00A0cancel"}
+		return fmt.Sprintf("Link  %d/%d  ·  %s", m.LinkIdx+1, len(m.Links), hint)
+	case m.ImageActive:
+		return fmt.Sprintf("Image  %d/%d", m.ImageIdx+1, len(m.ImageRefs))
+	case m.CodeOverlay:
+		return "Code preview  ·  esc/enter: close"
+	case m.LinkOverlay:
+		return m.LinkOverlaySrc
+	case m.ImageOverlay && m.ImageIdx < len(m.ImageRefs):
+		return m.ImageRefs[m.ImageIdx].Alt
+	case m.Focus == "nav" && m.NavXOffset > 0:
+		return fmt.Sprintf("%s  ·  nav x:%d", m.statusLeftBase(), m.NavXOffset)
+	case m.SearchActive:
+		return fmt.Sprintf("/%s  [%d/%d]", m.SearchQuery, m.SearchMatchIdx+1, len(m.SearchMatches))
 	default:
-		parts = append(parts, "↑↓/jk/pgup/pgdn\u00A0scroll")
-		if m.NavHidden {
-			parts = append(parts, "\\:\u00A0show\u00A0nav")
-		} else {
-			parts = append(parts, "tab:\u00A0nav")
-		}
-		parts = append(parts, "space:\u00A0nav", "/:\u00A0search", "t:\u00A0theme", "q\u00A0quit")
-		if len(m.NavHistory) > 0 {
-			parts = append(parts, "⌫:\u00A0back")
-		}
-		if n := len(m.CodeBlocks); n > 0 {
-			parts = append(parts, "c:\u00A0copy\u00A0code")
-		}
-		if n := len(m.Links); n > 0 {
-			parts = append(parts, "l:\u00A0links")
-		}
-		if n := len(m.ImageRefs); n > 0 {
-			parts = append(parts, "i:\u00A0images")
+		return m.statusLeftBase()
+	}
+}
+
+func (m Model) statusLeftBase() string {
+	switch {
+	case m.Cursor >= 0 && m.Cursor < len(m.Entries):
+		if title := m.Entries[m.Cursor].Title; title != "" {
+			return title
 		}
 	}
-	return " " + ui.JoinHints(max(1, m.Width-2), parts)
+	return config.DocsTitle
+}
+
+func clipHorizontal(s string, off, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if off < 0 {
+		off = 0
+	}
+	if off >= len(r) {
+		return ""
+	}
+	end := off + width
+	if end > len(r) {
+		end = len(r)
+	}
+	return string(r[off:end])
+}
+
+func (m *Model) navPan(delta int) {
+	if m.Focus != "nav" {
+		return
+	}
+	m.NavXOffset += delta
+	if m.NavXOffset < 0 {
+		m.NavXOffset = 0
+	}
+}
+
+func (m *Model) autoAdjustNavXOffset() {
+	lm := m.layoutMetrics()
+	niw := lm.navInnerW
+	if niw <= 0 || m.Cursor < 0 || m.Cursor >= len(m.Entries) {
+		m.NavXOffset = 0
+		return
+	}
+	e := m.Entries[m.Cursor]
+	if e.FilePath == "" {
+		m.NavXOffset = 0
+		return
+	}
+	body := strings.Repeat("  ", e.Depth) + e.Title
+	avail := max(1, niw-ui.VisWidth("▶ "))
+	bodyRunes := []rune(body)
+	n := len(bodyRunes)
+	if n <= avail {
+		m.NavXOffset = 0
+		return
+	}
+	nameRunes := []rune(e.Title)
+	nameLen := len(nameRunes)
+	if nameLen >= avail {
+		m.NavXOffset = max(0, n-avail)
+		return
+	}
+	nameStart := n - nameLen
+	target := nameStart - max(0, (avail-nameLen)/2)
+	if target < 0 {
+		target = 0
+	}
+	maxOff := n - avail
+	if target > maxOff {
+		target = maxOff
+	}
+	m.NavXOffset = target
+}
+
+func (m Model) navRenderEntry(prefix, body string, width int) string {
+	avail := max(0, width-ui.VisWidth(prefix))
+	if avail == 0 {
+		return ui.Truncate(prefix, width)
+	}
+	clipped := clipHorizontal(body, m.NavXOffset, avail)
+	if clipped == "" && m.NavXOffset > 0 {
+		clipped = clipHorizontal(body, max(0, len([]rune(body))-avail), avail)
+	}
+	if m.NavXOffset > 0 && clipped != "" {
+		clipped = "…" + clipHorizontal(clipped, 1, max(0, avail-1))
+	}
+	return ui.Truncate(prefix+clipped, width)
 }
 
 func (m Model) statusLine() string {
-	h := strings.ReplaceAll(m.getHint(), "\n", " · ")
-	h = strings.ReplaceAll(h, "\r", "")
-	maxW := max(1, m.Width-1)
-	if !m.HelpOverlay && !m.CodeOverlay && !m.LinkOverlay && !m.ImageOverlay &&
-		m.Focus != "search" && m.Focus != "gsearch" && m.Focus != "pagesearch" && m.Focus != "theme" {
-		suffix := "  ?:help"
-		sw := ui.VisWidth(suffix)
-		if ui.VisWidth(h)+sw <= maxW {
-			return h + suffix
-		}
-		return ui.Truncate(h, max(1, maxW-sw)) + suffix
+	th := m.currentTheme()
+	lm := m.layoutMetrics()
+
+	helpText := " ? Help "
+	if m.HelpOverlay {
+		helpText = " ? Close "
 	}
-	return ui.Truncate(h, maxW)
+	total := m.Vp.TotalLineCount()
+	visible := m.Vp.Height()
+	pct := 100.0
+	if total > visible {
+		pct = float64(m.Vp.YOffset()) / float64(total-visible) * 100
+		if pct > 100 {
+			pct = 100
+		}
+		if pct < 0 {
+			pct = 0
+		}
+	}
+	scrollText := fmt.Sprintf("  %3.f%% ", pct)
+
+	rightW := ui.VisWidth(scrollText) + ui.VisWidth(helpText)
+	left := " " + ui.Truncate(m.statusLeft(), max(1, lm.safeW-rightW-1))
+	padding := strings.Repeat(" ", max(0, lm.safeW-ui.VisWidth(left)-rightW))
+
+	mainStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.StatusFg)).
+		Background(lipgloss.Color(th.BorderInactive))
+	scrollStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.SectionHdrFg)).
+		Background(lipgloss.Color(th.BorderInactive))
+	helpStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.NavSelFg)).
+		Background(lipgloss.Color(th.NavSelBg))
+
+	return mainStyle.Render(left+padding) + scrollStyle.Render(scrollText) + helpStyle.Render(helpText)
 }
 
 func (m Model) statusHeight() int {
@@ -419,9 +550,13 @@ func (m Model) navHeaderRows() int {
 }
 
 func (m Model) layoutMetrics() layoutMetrics {
-	safeW := max(1, m.Width-1)
+	safeW := max(1, m.Width)
 	statusH := 1
-	vpH := m.Height - 2 - statusH
+	helpH := 0
+	if m.HelpOverlay {
+		helpH = helpPanelHeight
+	}
+	vpH := m.Height - 2 - statusH - helpH
 	if vpH < 1 {
 		vpH = 1
 	}
@@ -438,10 +573,10 @@ func (m Model) layoutMetrics() layoutMetrics {
 
 	contentOuterX := navOuterW
 	contentOuterW := max(1, safeW-navOuterW)
-	contentInnerX := contentOuterX + 1 // border only
-	contentInnerY := 1                 // top border occupies row 0
+	contentInnerX := contentOuterX + 1
+	contentInnerY := 1
 	if m.NavHidden {
-		vpH = m.Height - statusH
+		vpH = m.Height - statusH - helpH
 		if vpH < 1 {
 			vpH = 1
 		}
@@ -464,11 +599,12 @@ func (m Model) layoutMetrics() layoutMetrics {
 		bodyH:         max(1, m.Height-statusH),
 		navOuterW:     navOuterW,
 		navInnerW:     navInnerW,
-		navInnerY:     1, // top border occupies row 0
+		navInnerY:     1,
 		contentOuterX: contentOuterX,
 		contentOuterW: contentOuterW,
 		contentInnerX: contentInnerX,
 		contentInnerY: contentInnerY,
+		helpPanelH:    helpH,
 	}
 }
 
@@ -486,6 +622,69 @@ type docMsg struct {
 
 type clearStatusMsg struct{}
 type clearGraphicsMsg struct{}
+type fileChangedMsg struct{}
+
+func (m Model) openInEditor() tea.Cmd {
+	if m.SshSession != nil {
+		return nil
+	}
+	if m.Cursor < 0 || m.Cursor >= len(m.Entries) {
+		return nil
+	}
+	path := m.Entries[m.Cursor].FilePath
+	if path == "" {
+		return nil
+	}
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = os.Getenv("VISUAL")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	cmd := exec.Command(editor, path)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return tea.ExecProcess(cmd, func(_ error) tea.Msg {
+		return fileChangedMsg{}
+	})
+}
+
+func watchFiles(docs string, p *tea.Program) {
+	snapshot := func() map[string]time.Time {
+		m := map[string]time.Time{}
+		_ = filepath.WalkDir(docs, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".md") {
+				return nil
+			}
+			if info, err := d.Info(); err == nil {
+				m[path] = info.ModTime()
+			}
+			return nil
+		})
+		return m
+	}
+	prev := snapshot()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		cur := snapshot()
+		changed := len(cur) != len(prev)
+		if !changed {
+			for k, v := range cur {
+				if prev[k] != v {
+					changed = true
+					break
+				}
+			}
+		}
+		if changed {
+			prev = cur
+			p.Send(fileChangedMsg{})
+		}
+	}
+}
 
 type imageOverlayMsg struct {
 	rendered string
@@ -493,6 +692,42 @@ type imageOverlayMsg struct {
 	kitty    string
 	charW    int
 	charH    int
+}
+
+func blankImagePlaceholder(w, h int) string {
+	if w < 1 || h < 1 {
+		return ""
+	}
+	line := strings.Repeat(" ", w)
+	lines := make([]string, h)
+	for i := range lines {
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func kittyImagePayloadPNG(img image.Image, pixW, pixH, cols, rows int) string {
+	if img == nil {
+		return ""
+	}
+	opts := &kitty.Options{
+		Action:          kitty.TransmitAndPut,
+		Format:          kitty.PNG,
+		Transmission:    kitty.Direct,
+		ImageWidth:      pixW,
+		ImageHeight:     pixH,
+		Columns:         cols,
+		Rows:            rows,
+		Z:               1,
+		DoNotMoveCursor: true,
+		Quite:           2,
+		Chunk:           true,
+	}
+	var out bytes.Buffer
+	if err := kitty.EncodeGraphics(&out, img, opts); err != nil {
+		return ""
+	}
+	return out.String()
 }
 
 func (m Model) loadImageOverlay() tea.Cmd {
@@ -533,6 +768,8 @@ func (m Model) loadImageOverlay() tea.Cmd {
 			return imageOverlayMsg{rendered: "[Cannot decode: " + ref.Alt + "]"}
 		}
 		charW, charH := images.ImageOverlaySize(img.Bounds().Dx(), img.Bounds().Dy(), maxW, maxH)
+		mo := mosaic.New().Width(charW).Height(charH)
+		mosaicRendered := mo.Render(img)
 		if useKitty || useSixel {
 			cw := cellPixW
 			if cw <= 0 {
@@ -547,16 +784,12 @@ func (m Model) loadImageOverlay() tea.Cmd {
 			draw.Draw(dst, dst.Bounds(), &image.Uniform{color.White}, image.Point{}, draw.Src)
 			xdraw.CatmullRom.Scale(dst, dst.Bounds(), img, img.Bounds(), xdraw.Over, nil)
 
-			placeholder := strings.Repeat(strings.Repeat(" ", charW)+"\n", charH)
-			placeholder = strings.TrimRight(placeholder, "\n")
-
 			if useKitty {
-				var buf bytes.Buffer
-				if encErr := png.Encode(&buf, dst); encErr == nil {
-					b64 := base64.StdEncoding.EncodeToString(buf.Bytes())
+				kittyPayload := kittyImagePayloadPNG(dst, pixW, pixH, charW, charH)
+				if kittyPayload != "" {
 					return imageOverlayMsg{
-						rendered: placeholder,
-						kitty:    "\x1b_Gf=100,a=T,t=d,i=1;" + b64 + "\x1b\\",
+						rendered: blankImagePlaceholder(charW, charH),
+						kitty:    kittyPayload,
 						charW:    charW,
 						charH:    charH,
 					}
@@ -567,7 +800,7 @@ func (m Model) loadImageOverlay() tea.Cmd {
 				var buf bytes.Buffer
 				if encErr := sixel.NewEncoder(&buf).Encode(dst); encErr == nil {
 					return imageOverlayMsg{
-						rendered: placeholder,
+						rendered: blankImagePlaceholder(charW, charH),
 						sixel:    buf.String(),
 						charW:    charW,
 						charH:    charH,
@@ -575,8 +808,7 @@ func (m Model) loadImageOverlay() tea.Cmd {
 				}
 			}
 		}
-		mo := mosaic.New().Width(charW).Height(charH)
-		return imageOverlayMsg{rendered: mo.Render(img), charW: charW, charH: charH}
+		return imageOverlayMsg{rendered: mosaicRendered, charW: charW, charH: charH}
 	}
 }
 
@@ -828,18 +1060,44 @@ func (m Model) setTitleCmd(title string) tea.Cmd {
 	}
 }
 
+func (m Model) writeGraphics(seq string) {
+	if seq == "" {
+		return
+	}
+	var w io.Writer = os.Stdout
+	if m.SshSession != nil {
+		w = m.SshSession
+	}
+	_, _ = fmt.Fprint(w, m.wrapGraphics(seq))
+}
+
+func (m *Model) closeImageOverlay() tea.Cmd {
+	m.ImageOverlay = false
+	m.ImageOverlaySrc = ""
+	m.ImageOverlaySixel = ""
+	m.ImageOverlayKitty = ""
+	m.NeedsGraphicsClear = true
+	return clearGraphicsCmd()
+}
+
+func (m *Model) scrollDebounce() bool {
+	now := time.Now()
+	if now.Sub(m.LastNavScrollTime) < 60*time.Millisecond {
+		return false
+	}
+	m.LastNavScrollTime = now
+	return true
+}
+
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
-		m.openCurrent(),
-		func() tea.Msg {
-			var w io.Writer = os.Stdout
-			if m.SshSession != nil {
-				w = m.SshSession
-			}
-			graphics.SendProbe(w, m.IsTmux)
+	cmds := []tea.Cmd{m.openCurrent()}
+	if m.SshSession != nil {
+		cmds = append(cmds, func() tea.Msg {
+			graphics.SendProbe(m.SshSession, m.IsTmux)
 			return nil
-		},
-	)
+		})
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -922,6 +1180,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case fileChangedMsg:
+		currentPath := ""
+		if m.Cursor >= 0 && m.Cursor < len(m.Entries) {
+			currentPath = m.Entries[m.Cursor].FilePath
+		}
+		savedOffset := m.Vp.YOffset()
+		m.Entries = navigation.BuildNav(m.Docs)
+		if m.Cursor >= len(m.Entries) {
+			m.Cursor = max(0, len(m.Entries)-1)
+		}
+		for i, e := range m.Entries {
+			if e.FilePath == currentPath {
+				m.Cursor = i
+				break
+			}
+		}
+		m = m.ensureCursorVisible(m.navEntrySpace())
+		m.RestoreYOffset = savedOffset
+		cmds = append(cmds, m.openCurrent())
+
 	case search.GsearchMsg:
 		if msg.Query == m.GsearchQuery {
 			m.GsearchResults = msg.Results
@@ -933,6 +1211,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case clearGraphicsMsg:
 		m.NeedsGraphicsClear = false
+		m.writeGraphics("\x1b_Ga=d,d=A\x1b\\")
 		return m, nil
 
 	case imageOverlayMsg:
@@ -942,6 +1221,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ImageOverlayW = msg.charW
 		m.ImageOverlayH = msg.charH
 		m.ImageOverlay = true
+		m.writeGraphics(m.imageOverlayInject())
 
 	case tea.MouseMsg:
 		mouse := msg.Mouse()
@@ -972,20 +1252,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.MouseWheelUp:
 				switch m.Focus {
 				case "theme":
-					now := time.Now()
-					if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
-						m.LastNavScrollTime = now
-						if m.ThemeIdx > 0 {
-							m.ThemeIdx--
-							cmds = append(cmds, m.openCurrent())
-						}
+					if m.scrollDebounce() && m.ThemeIdx > 0 {
+						m.ThemeIdx--
+						cmds = append(cmds, m.openCurrent())
 					}
 					return m, tea.Batch(cmds...)
 				default:
 					if inNav {
-						now := time.Now()
-						if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
-							m.LastNavScrollTime = now
+						if m.scrollDebounce() {
 							m = m.moveCursor(-1)
 							m.NavScrollSeq++
 							cmds = append(cmds, navScrollDebounceCmd(m.NavScrollSeq))
@@ -999,20 +1273,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case tea.MouseWheelDown:
 				switch m.Focus {
 				case "theme":
-					now := time.Now()
-					if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
-						m.LastNavScrollTime = now
-						if m.ThemeIdx < len(themes.Themes)-1 {
-							m.ThemeIdx++
-							cmds = append(cmds, m.openCurrent())
-						}
+					if m.scrollDebounce() && m.ThemeIdx < len(themes.Themes)-1 {
+						m.ThemeIdx++
+						cmds = append(cmds, m.openCurrent())
 					}
 					return m, tea.Batch(cmds...)
 				default:
 					if inNav {
-						now := time.Now()
-						if now.Sub(m.LastNavScrollTime) >= 60*time.Millisecond {
-							m.LastNavScrollTime = now
+						if m.scrollDebounce() {
 							m = m.moveCursor(1)
 							m.NavScrollSeq++
 							cmds = append(cmds, navScrollDebounceCmd(m.NavScrollSeq))
@@ -1038,12 +1306,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				outside := mouse.X < startX || mouse.X >= startX+fgW || mouse.Y < startY || mouse.Y >= startY+fgH
 				if outside {
-					m.ImageOverlay = false
-					m.ImageOverlaySrc = ""
-					m.ImageOverlaySixel = ""
-					m.ImageOverlayKitty = ""
-					m.NeedsGraphicsClear = true
-					cmds = append(cmds, clearGraphicsCmd())
+					cmds = append(cmds, m.closeImageOverlay())
 					break
 				}
 			}
@@ -1127,15 +1390,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case " ", "space":
 			cmds = append(cmds, m.jumpToNav())
-			return m, tea.Batch(cmds...)
-		}
-		if m.HelpOverlay {
-			switch msg.String() {
-			case "esc", "enter", "?":
-				m.HelpOverlay = false
-			case "q", "ctrl+c":
-				return m, tea.Quit
-			}
 			return m, tea.Batch(cmds...)
 		}
 		switch m.Focus {
@@ -1304,6 +1558,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "enter", "right", "l":
 				m.Focus = "content"
+			case "left", "h":
+				m.navPan(-2)
 			case "p":
 				m.Focus = "pagesearch"
 				m.PsearchQuery = ""
@@ -1326,6 +1582,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "up", "k":
 				oldCursor := m.Cursor
 				m = m.moveCursor(-1)
+				m.autoAdjustNavXOffset()
 				if m.Cursor != oldCursor && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
 					m.appendNavHistory(navHistEntry{oldCursor, m.Vp.YOffset()})
 					cmds = append(cmds, m.openCurrent())
@@ -1333,12 +1590,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "down", "j":
 				oldCursor := m.Cursor
 				m = m.moveCursor(1)
+				m.autoAdjustNavXOffset()
 				if m.Cursor != oldCursor && m.Cursor >= 0 && m.Cursor < len(m.Entries) && m.Entries[m.Cursor].FilePath != "" {
 					m.appendNavHistory(navHistEntry{oldCursor, m.Vp.YOffset()})
 					cmds = append(cmds, m.openCurrent())
 				}
+			case "L":
+				m.navPan(2)
 			case "?":
 				m.HelpOverlay = !m.HelpOverlay
+				m.Vp.SetHeight(m.vpH())
 			}
 		default:
 			switch msg.String() {
@@ -1351,6 +1612,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.openCurrent())
 				}
 				m.Focus = "nav"
+				m.autoAdjustNavXOffset()
 			case "/":
 				m.Focus = "search"
 				m.SearchQuery = ""
@@ -1407,12 +1669,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.LinkOverlay = false
 					m.LinkOverlaySrc = ""
 				} else if m.ImageOverlay {
-					m.ImageOverlay = false
-					m.ImageOverlaySrc = ""
-					m.ImageOverlaySixel = ""
-					m.ImageOverlayKitty = ""
-					m.NeedsGraphicsClear = true
-					cmds = append(cmds, clearGraphicsCmd())
+					cmds = append(cmds, m.closeImageOverlay())
 				} else if m.CodeActive && len(m.CodeBlocks) > 0 {
 					m.CodeOverlay = true
 					m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
@@ -1434,9 +1691,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else if m.ImageActive {
 					cmds = append(cmds, m.loadImageOverlay())
 				} else {
-					var cmd tea.Cmd
-					m.Vp, cmd = m.Vp.Update(msg)
-					cmds = append(cmds, cmd)
+					cmds = append(cmds, m.openInEditor())
 				}
 			case "y":
 				if m.CodeActive && len(m.CodeBlocks) > 0 {
@@ -1451,12 +1706,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.LinkOverlay = false
 					m.LinkOverlaySrc = ""
 				} else if m.ImageOverlay {
-					m.ImageOverlay = false
-					m.ImageOverlaySrc = ""
-					m.ImageOverlaySixel = ""
-					m.ImageOverlayKitty = ""
-					m.NeedsGraphicsClear = true
-					cmds = append(cmds, clearGraphicsCmd())
+					cmds = append(cmds, m.closeImageOverlay())
 				} else if m.ImageActive {
 					m.clearContentTargetModes()
 					m.ImageOverlay = false
@@ -1493,6 +1743,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.openCurrent())
 				} else {
 					m.Focus = "nav"
+					m.autoAdjustNavXOffset()
 				}
 			case "shift+tab":
 				if m.NavHidden {
@@ -1504,16 +1755,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, m.openCurrent())
 				} else {
 					m.Focus = "nav"
+					m.autoAdjustNavXOffset()
 				}
-			case "up", "down", "j", "k":
-				var cmd tea.Cmd
-				m.Vp, cmd = m.Vp.Update(msg)
-				cmds = append(cmds, cmd)
-			case "pgup", "pageup":
-				var cmd tea.Cmd
-				m.Vp, cmd = m.Vp.Update(msg)
-				cmds = append(cmds, cmd)
-			case "pgdn", "pgdown", "pagedown":
+			case "up", "down", "j", "k", "pgup", "pageup", "pgdn", "pgdown", "pagedown":
 				var cmd tea.Cmd
 				m.Vp, cmd = m.Vp.Update(msg)
 				cmds = append(cmds, cmd)
@@ -1557,6 +1801,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.openCurrent())
 			case "?":
 				m.HelpOverlay = !m.HelpOverlay
+				m.Vp.SetHeight(m.vpH())
 			}
 		}
 	}
@@ -1650,123 +1895,60 @@ func (m Model) renderImageOverlay() string {
 		Render(content)
 }
 
-func (m Model) renderHelpOverlay() string {
+func (m Model) imageOverlayInject() string {
+	if !m.ImageOverlay {
+		return ""
+	}
+	fg := m.renderImageOverlay()
+	startX, startY := m.overlayStart(fg)
+	termRow := startY + 4
+	termCol := startX + 3
+	switch {
+	case m.ImageOverlayKitty != "":
+		return fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", termRow, termCol, m.ImageOverlayKitty)
+	case m.ImageOverlaySixel != "":
+		return fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", termRow, termCol, m.ImageOverlaySixel)
+	default:
+		return ""
+	}
+}
+
+func (m Model) renderHelpPanel() string {
 	th := m.currentTheme()
 	lm := m.layoutMetrics()
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(th.SectionHdrFg))
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(th.StatusFg))
 
-	type binding struct{ key, desc string }
-	sections := []struct {
-		title    string
-		bindings []binding
-	}{
-		{"Navigation", []binding{
-			{"↑↓ / j k", "move cursor"},
-			{"tab / space", "switch nav ↔ content"},
-			{"\\ ", "toggle / hide nav"},
-			{"enter / →", "open page"},
-			{"backspace", "go back"},
-		}},
-		{"Scrolling", []binding{
-			{"↑↓ / j k", "scroll line"},
-			{"pgup / pgdn", "scroll page"},
-		}},
-		{"Search", []binding{
-			{"/ (nav)", "global search"},
-			{"/ (content)", "in-page search"},
-			{"p", "page-title search"},
-			{"n / N", "next / prev match"},
-			{"esc", "cancel search"},
-		}},
-		{"Code Blocks", []binding{
-			{"c / C", "next / prev block"},
-			{"enter / y", "show block"},
-			{"esc", "exit code mode"},
-		}},
-		{"Links", []binding{
-			{"l / L", "next / prev link"},
-			{"enter", "open / show URL"},
-			{"esc", "exit link mode"},
-		}},
-		{"Images", []binding{
-			{"i / I", "next / prev image"},
-			{"enter", "show image"},
-			{"esc", "exit image mode"},
-		}},
-		{"Other", []binding{
-			{"t", "theme picker"},
-			{"?", "this help"},
-			{"q / ctrl+c", "quit"},
-		}},
+	type pair struct{ key, desc string }
+	left := []pair{
+		{"↑↓ / jk", "move / scroll"},
+		{"enter / →", "open page"},
+		{"/", "search   n/N  next/prev"},
+		{"c / l / i", "code · link · image"},
+		{"q / ctrl+c", "quit"},
+	}
+	right := []pair{
+		{"tab / space", "switch focus"},
+		{"\\", "toggle nav"},
+		{"backspace", "go back"},
+		{"t", "theme picker"},
+		{"?", "close help"},
 	}
 
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(th.NavSelFg)).
-		Background(lipgloss.Color(th.NavSelBg)).
-		Bold(true)
-	descStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(th.NavItemFg))
-	headerStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(th.SectionHdrFg)).
-		Bold(true)
-
-	colW := (lm.safeW - 4) / 2
-	if colW < 30 {
-		colW = lm.safeW - 4
+	const keyW = 12
+	colW := max(1, lm.safeW/2)
+	buildEntry := func(k, d string) string {
+		sp := strings.Repeat(" ", max(0, keyW-ui.VisWidth(k)))
+		return "  " + keyStyle.Render(k) + sp + "  " + descStyle.Render(d)
 	}
-	twoCol := lm.safeW >= 70
-	keyW := 16
-
-	renderSection := func(s struct {
-		title    string
-		bindings []binding
-	}) []string {
-		var lines []string
-		lines = append(lines, headerStyle.Render(s.title))
-		for _, b := range s.bindings {
-			key := keyStyle.Width(keyW).Render(b.key)
-			desc := descStyle.Render(b.desc)
-			lines = append(lines, "  "+key+" "+desc)
-		}
-		return lines
+	lines := make([]string, 0, helpPanelHeight)
+	lines = append(lines, "")
+	for i := range left {
+		leftCell := lipgloss.NewStyle().Width(colW).Render(buildEntry(left[i].key, left[i].desc))
+		lines = append(lines, leftCell+buildEntry(right[i].key, right[i].desc))
 	}
-
-	var cols [2][]string
-	for i, sec := range sections {
-		target := 0
-		if twoCol && i >= (len(sections)+1)/2 {
-			target = 1
-		}
-		cols[target] = append(cols[target], renderSection(sec)...)
-		cols[target] = append(cols[target], "")
-	}
-
-	var bodyLines []string
-	titleLine := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(th.SectionHdrFg)).
-		Bold(true).
-		Width(lm.safeW).
-		Align(lipgloss.Center).
-		Render("Keybindings")
-	bodyLines = append(bodyLines, "", titleLine, "")
-
-	if twoCol {
-		maxRows := max(len(cols[0]), len(cols[1]))
-		for i := 0; i < maxRows; i++ {
-			left, right := "", ""
-			if i < len(cols[0]) {
-				left = cols[0][i]
-			}
-			if i < len(cols[1]) {
-				right = cols[1][i]
-			}
-			leftPad := lipgloss.NewStyle().Width(colW).Render(left)
-			bodyLines = append(bodyLines, "  "+leftPad+"  "+right)
-		}
-	} else {
-		bodyLines = append(bodyLines, cols[0]...)
-	}
-
-	return strings.Join(bodyLines, "\n")
+	lines = append(lines, "")
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderCodeOverlay() string {
@@ -1810,8 +1992,6 @@ func (m Model) View() tea.View {
 	}
 
 	var layout string
-	var imageInject string
-
 	renderFullScreenOverlay := func(content string) tea.View {
 		bodyLines := strings.Split(content, "\n")
 		bodyMaxLines := max(1, m.Height-1)
@@ -1836,9 +2016,6 @@ func (m Model) View() tea.View {
 		return v
 	}
 
-	if m.HelpOverlay {
-		return renderFullScreenOverlay(m.renderHelpOverlay())
-	}
 	if m.CodeOverlay {
 		return renderFullScreenOverlay(m.renderCodeOverlay())
 	}
@@ -1861,17 +2038,7 @@ func (m Model) View() tea.View {
 		layout = ui.OverlayCenter(layout, m.renderThemePanel())
 	} else if m.ImageOverlay {
 		fg := m.renderImageOverlay()
-		startX, startY := m.overlayStart(fg)
 		layout = ui.OverlayCenter(layout, fg)
-		termRow := startY + 3 + 1
-		termCol := startX + 2 + 1
-		if m.ImageOverlayKitty != "" {
-			imageInject = fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", termRow, termCol, m.ImageOverlayKitty)
-		} else if m.ImageOverlaySixel != "" {
-			imageInject = fmt.Sprintf("\x1b7\x1b[%d;%dH%s\x1b8", termRow, termCol, m.ImageOverlaySixel)
-		}
-	} else if m.NeedsGraphicsClear {
-		imageInject = "\x1b_Ga=d,d=A\x1b\\\x1b[J"
 	}
 
 	hint := m.statusLine()
@@ -1883,19 +2050,21 @@ func (m Model) View() tea.View {
 
 	body := layout
 	bodyLines := strings.Split(body, "\n")
-	bodyMaxLines := max(1, m.Height-1)
+	bodyMaxLines := max(1, m.Height-1-lm.helpPanelH)
 	if len(bodyLines) > bodyMaxLines {
 		bodyLines = bodyLines[:bodyMaxLines]
+	}
+	for len(bodyLines) < bodyMaxLines {
+		bodyLines = append(bodyLines, "")
+	}
+	if lm.helpPanelH > 0 {
+		bodyLines = append(bodyLines, strings.Split(m.renderHelpPanel(), "\n")...)
 	}
 	for len(bodyLines) < m.Height {
 		bodyLines = append(bodyLines, "")
 	}
 	body = strings.Join(bodyLines, "\n")
 	out := ui.OverlayAtLine(body, status, 0, m.Height-1)
-	if imageInject != "" {
-		out += m.wrapTmux(imageInject)
-	}
-
 	out = m.wrapTmux("\x1b[?2026h") + out + m.wrapTmux("\x1b[?2026l")
 	v := tea.NewView(out)
 	v.AltScreen = true
@@ -1939,17 +2108,16 @@ func (m Model) renderNav() string {
 			end := min(len(m.PsearchResults), start+space)
 			for i := start; i < end; i++ {
 				navIdx := m.PsearchResults[i]
-				e := m.Entries[navIdx]
-				indent := strings.Repeat("  ", e.Depth)
+				label := m.Entries[navIdx].Title
 				style := lipgloss.NewStyle().Width(niw)
 				if i == m.PsearchCursor {
 					style = style.Background(lipgloss.Color(th.NavSelBg)).
 						Foreground(lipgloss.Color(th.NavSelFg)).
 						Bold(true)
-					lines = append(lines, style.Render("▶ "+indent+ui.Truncate(e.Title, niw-len(indent)-2)))
+					lines = append(lines, style.Render(m.navRenderEntry("▶ ", label, niw)))
 				} else {
 					style = style.Foreground(lipgloss.Color(th.NavItemFg))
-					lines = append(lines, style.Render("  "+indent+ui.Truncate(e.Title, niw-len(indent)-2)))
+					lines = append(lines, style.Render(m.navRenderEntry("  ", label, niw)))
 				}
 			}
 		}
@@ -1985,10 +2153,10 @@ func (m Model) renderNav() string {
 					style = style.Background(lipgloss.Color(th.NavSelBg)).
 						Foreground(lipgloss.Color(th.NavSelFg)).
 						Bold(true)
-					lines = append(lines, style.Render("▶ "+prefix+ui.Truncate(title, niw-len(prefix)-2)))
+					lines = append(lines, style.Render(m.navRenderEntry("▶ "+prefix, title, niw)))
 				} else {
 					style = style.Foreground(lipgloss.Color(th.NavItemFg))
-					lines = append(lines, style.Render("  "+prefix+ui.Truncate(title, niw-len(prefix)-2)))
+					lines = append(lines, style.Render(m.navRenderEntry("  "+prefix, title, niw)))
 				}
 			}
 		}
@@ -2009,19 +2177,18 @@ func (m Model) renderNav() string {
 			style := lipgloss.NewStyle().Width(niw)
 
 			if e.FilePath == "" {
-				title := ui.Truncate(strings.ToUpper(e.Title), niw-len(indent))
+				title := m.navRenderEntry("", indent+strings.ToUpper(e.Title), niw)
 				style = style.Foreground(lipgloss.Color(th.SectionHdrFg)).Bold(true)
-				lines = append(lines, style.Render(indent+title))
+				lines = append(lines, style.Render(title))
 			} else {
-				title := ui.Truncate(e.Title, niw-len(indent)-2)
 				if absIdx == m.Cursor {
 					style = style.Background(lipgloss.Color(th.NavSelBg)).
 						Foreground(lipgloss.Color(th.NavSelFg)).
 						Bold(true)
-					lines = append(lines, style.Render("▶ "+indent+title))
+					lines = append(lines, style.Render(m.navRenderEntry("▶ ", indent+e.Title, niw)))
 				} else {
 					style = style.Foreground(lipgloss.Color(th.NavItemFg))
-					lines = append(lines, style.Render("  "+indent+title))
+					lines = append(lines, style.Render(m.navRenderEntry("  ", indent+e.Title, niw)))
 				}
 			}
 		}

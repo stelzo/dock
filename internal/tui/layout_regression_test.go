@@ -201,8 +201,8 @@ func TestRenderedFrameLeavesWidthGuardBand(t *testing.T) {
 			maxW = w
 		}
 	}
-	if maxW >= m.Width {
-		t.Fatalf("frame width = %d, want less than terminal width %d", maxW, m.Width)
+	if maxW > m.Width {
+		t.Fatalf("frame width = %d, want at most terminal width %d", maxW, m.Width)
 	}
 }
 

@@ -270,6 +270,7 @@ func RunServe(docs string, port string) {
 					sixel: m.SixelSupported,
 					kitty: m.KittySupported,
 				})
+				log.Info("graphics detection", "user", s.User(), "term", pty.Term, "kitty", m.KittySupported, "sixel", m.SixelSupported)
 
 				gr := &tui.GraphicsReader{R: s}
 				return m,

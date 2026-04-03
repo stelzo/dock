@@ -266,10 +266,6 @@ type Model struct {
 	LinkActive         bool
 	ImageActive        bool
 	HelpOverlay        bool
-	CodeOverlay        bool
-	CodeOverlaySrc     string
-	LinkOverlay        bool
-	LinkOverlaySrc     string
 	ImageOverlay       bool
 	ImageOverlaySrc    string
 	ImageOverlaySixel  string
@@ -382,17 +378,12 @@ func (m Model) statusLeft() string {
 	case m.CodeActive:
 		return fmt.Sprintf("Code  %d/%d", m.CopyIdx+1, len(m.CodeBlocks))
 	case m.LinkActive:
-		hint := "enter: open"
 		if m.LinkIdx < len(m.Links) && !m.Links[m.LinkIdx].IsInternal {
-			hint = "enter: show URL"
+			return fmt.Sprintf("Link  %d/%d  ·  %s", m.LinkIdx+1, len(m.Links), m.Links[m.LinkIdx].URL)
 		}
-		return fmt.Sprintf("Link  %d/%d  ·  %s", m.LinkIdx+1, len(m.Links), hint)
+		return fmt.Sprintf("Link  %d/%d", m.LinkIdx+1, len(m.Links))
 	case m.ImageActive:
 		return fmt.Sprintf("Image  %d/%d", m.ImageIdx+1, len(m.ImageRefs))
-	case m.CodeOverlay:
-		return "Code preview  ·  esc/enter: close"
-	case m.LinkOverlay:
-		return m.LinkOverlaySrc
 	case m.ImageOverlay && m.ImageIdx < len(m.ImageRefs):
 		return m.ImageRefs[m.ImageIdx].Alt
 	case m.Focus == "nav" && m.NavXOffset > 0:
@@ -495,6 +486,35 @@ func (m Model) navRenderEntry(prefix, body string, width int) string {
 	return ui.Truncate(prefix+clipped, width)
 }
 
+func (m Model) statusHints() string {
+	switch {
+	case m.CodeActive:
+		return "  c/C next · y copy · esc  "
+	case m.LinkActive:
+		if m.LinkIdx < len(m.Links) && !m.Links[m.LinkIdx].IsInternal {
+			return "  l/L next · y copy · esc  "
+		}
+		return "  l/L next · enter open · esc  "
+	case m.ImageActive:
+		return "  i/I next · enter view · esc  "
+	case m.Focus == "nav":
+		return "  ↑↓ navigate · enter open · p page · / global  "
+	default:
+		var parts []string
+		if len(m.CodeBlocks) > 0 {
+			parts = append(parts, "c code")
+		}
+		if len(m.Links) > 0 {
+			parts = append(parts, "l link")
+		}
+		if len(m.ImageRefs) > 0 {
+			parts = append(parts, "i img")
+		}
+		parts = append(parts, "/ search")
+		return "  " + strings.Join(parts, " · ") + "  "
+	}
+}
+
 func (m Model) statusLine() string {
 	th := m.currentTheme()
 	lm := m.layoutMetrics()
@@ -503,6 +523,7 @@ func (m Model) statusLine() string {
 	if m.HelpOverlay {
 		helpText = " ? Close "
 	}
+	hintsText := m.statusHints()
 	total := m.Vp.TotalLineCount()
 	visible := m.Vp.Height()
 	pct := 100.0
@@ -517,12 +538,15 @@ func (m Model) statusLine() string {
 	}
 	scrollText := fmt.Sprintf("  %3.f%% ", pct)
 
-	rightW := ui.VisWidth(scrollText) + ui.VisWidth(helpText)
+	rightW := ui.VisWidth(hintsText) + ui.VisWidth(scrollText) + ui.VisWidth(helpText)
 	left := " " + ui.Truncate(m.statusLeft(), max(1, lm.safeW-rightW-1))
 	padding := strings.Repeat(" ", max(0, lm.safeW-ui.VisWidth(left)-rightW))
 
 	mainStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(th.StatusFg)).
+		Background(lipgloss.Color(th.BorderInactive))
+	hintsStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(th.SectionHdrFg)).
 		Background(lipgloss.Color(th.BorderInactive))
 	scrollStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(th.SectionHdrFg)).
@@ -531,7 +555,7 @@ func (m Model) statusLine() string {
 		Foreground(lipgloss.Color(th.NavSelFg)).
 		Background(lipgloss.Color(th.NavSelBg))
 
-	return mainStyle.Render(left+padding) + scrollStyle.Render(scrollText) + helpStyle.Render(helpText)
+	return mainStyle.Render(left+padding) + hintsStyle.Render(hintsText) + scrollStyle.Render(scrollText) + helpStyle.Render(helpText)
 }
 
 func (m Model) statusHeight() int {
@@ -994,10 +1018,6 @@ func (m *Model) jumpToNav() tea.Cmd {
 	var cmd tea.Cmd
 	m.clearContentTargetModes()
 	m.HelpOverlay = false
-	m.CodeOverlay = false
-	m.CodeOverlaySrc = ""
-	m.LinkOverlay = false
-	m.LinkOverlaySrc = ""
 	m.ImageOverlay = false
 	m.ImageOverlaySrc = ""
 	m.ImageOverlaySixel = ""
@@ -1156,10 +1176,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.CodeActive = false
 		m.LinkActive = false
 		m.ImageActive = false
-		m.CodeOverlay = false
-		m.CodeOverlaySrc = ""
-		m.LinkOverlay = false
-		m.LinkOverlaySrc = ""
 		m.ImageOverlay = false
 		m.ImageOverlaySrc = ""
 		m.ImageOverlaySixel = ""
@@ -1241,8 +1257,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.StatusMsg = "Page not found in nav"
 				cmds = append(cmds, statusCmd(2*time.Second))
 			} else {
-				m.LinkOverlay = true
-				m.LinkOverlaySrc = lk.URL
+				cmds = append(cmds, tea.SetClipboard(lk.URL))
+				m.StatusMsg = "Link copied to clipboard"
+				cmds = append(cmds, statusCmd(2*time.Second))
 			}
 		}
 
@@ -1662,17 +1679,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.highlightCurrentImage()
 				}
 			case "enter":
-				if m.CodeOverlay {
-					m.CodeOverlay = false
-					m.CodeOverlaySrc = ""
-				} else if m.LinkOverlay {
-					m.LinkOverlay = false
-					m.LinkOverlaySrc = ""
-				} else if m.ImageOverlay {
+				if m.ImageOverlay {
 					cmds = append(cmds, m.closeImageOverlay())
 				} else if m.CodeActive && len(m.CodeBlocks) > 0 {
-					m.CodeOverlay = true
-					m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
+					cmds = append(cmds, tea.SetClipboard(m.CodeBlocks[m.CopyIdx].Content))
+					m.StatusMsg = "Code copied to clipboard"
+					cmds = append(cmds, statusCmd(2*time.Second))
 				} else if m.LinkActive && len(m.Links) > 0 {
 					lk := m.Links[m.LinkIdx]
 					if lk.IsInternal && lk.NavIdx >= 0 {
@@ -1685,8 +1697,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.StatusMsg = "Page not found in nav"
 						cmds = append(cmds, statusCmd(2*time.Second))
 					} else {
-						m.LinkOverlay = true
-						m.LinkOverlaySrc = lk.URL
+						cmds = append(cmds, tea.SetClipboard(lk.URL))
+						m.StatusMsg = "Link copied to clipboard"
+						cmds = append(cmds, statusCmd(2*time.Second))
 					}
 				} else if m.ImageActive {
 					cmds = append(cmds, m.loadImageOverlay())
@@ -1695,17 +1708,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "y":
 				if m.CodeActive && len(m.CodeBlocks) > 0 {
-					m.CodeOverlay = true
-					m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
+					cmds = append(cmds, tea.SetClipboard(m.CodeBlocks[m.CopyIdx].Content))
+					m.StatusMsg = "Code copied to clipboard"
+					cmds = append(cmds, statusCmd(2*time.Second))
+				} else if m.LinkActive && len(m.Links) > 0 {
+					cmds = append(cmds, tea.SetClipboard(m.Links[m.LinkIdx].URL))
+					m.StatusMsg = "Link copied to clipboard"
+					cmds = append(cmds, statusCmd(2*time.Second))
 				}
 			case "esc":
-				if m.CodeOverlay {
-					m.CodeOverlay = false
-					m.CodeOverlaySrc = ""
-				} else if m.LinkOverlay {
-					m.LinkOverlay = false
-					m.LinkOverlaySrc = ""
-				} else if m.ImageOverlay {
+				if m.ImageOverlay {
 					cmds = append(cmds, m.closeImageOverlay())
 				} else if m.ImageActive {
 					m.clearContentTargetModes()
@@ -1924,7 +1936,7 @@ func (m Model) renderHelpPanel() string {
 		{"↑↓ / jk", "move / scroll"},
 		{"enter / →", "open page"},
 		{"/", "search   n/N  next/prev"},
-		{"c / l / i", "code · link · image"},
+		{"c / l / i", "code · link · image  (enter/y=copy)"},
 		{"q / ctrl+c", "quit"},
 	}
 	right := []pair{
@@ -1949,22 +1961,6 @@ func (m Model) renderHelpPanel() string {
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
-}
-
-func (m Model) renderCodeOverlay() string {
-	lm := m.layoutMetrics()
-	return lipgloss.NewStyle().
-		Width(lm.safeW).
-		Height(m.Height).
-		Render(m.CodeOverlaySrc)
-}
-
-func (m Model) renderLinkOverlay() string {
-	lm := m.layoutMetrics()
-	return lipgloss.NewStyle().
-		Width(lm.safeW).
-		Height(m.Height).
-		Render(m.LinkOverlaySrc)
 }
 
 func (m Model) View() tea.View {
@@ -1992,37 +1988,6 @@ func (m Model) View() tea.View {
 	}
 
 	var layout string
-	renderFullScreenOverlay := func(content string) tea.View {
-		bodyLines := strings.Split(content, "\n")
-		bodyMaxLines := max(1, m.Height-1)
-		if len(bodyLines) > bodyMaxLines {
-			bodyLines = bodyLines[:bodyMaxLines]
-		}
-		for len(bodyLines) < bodyMaxLines {
-			bodyLines = append(bodyLines, "")
-		}
-		body := strings.Join(bodyLines, "\n")
-		status := lipgloss.NewStyle().
-			Foreground(lipgloss.Color(th.StatusFg)).
-			Background(lipgloss.Color(th.BorderInactive)).
-			Width(lm.safeW).
-			MaxWidth(lm.safeW).
-			Render(m.statusLine())
-		out := body + "\n" + status
-		out = m.wrapTmux("\x1b[?2026h") + out + m.wrapTmux("\x1b[?2026l")
-		v := tea.NewView(out)
-		v.AltScreen = true
-		v.MouseMode = tea.MouseModeCellMotion
-		return v
-	}
-
-	if m.CodeOverlay {
-		return renderFullScreenOverlay(m.renderCodeOverlay())
-	}
-	if m.LinkOverlay {
-		return renderFullScreenOverlay(m.renderLinkOverlay())
-	}
-
 	containerW := lm.contentOuterW
 
 	if m.NavHidden {

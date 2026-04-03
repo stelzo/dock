@@ -53,8 +53,6 @@ Sleep 500ms
 Type "l"
 Sleep 1s
 Enter
-Sleep 2s
-Enter
 Sleep 2.5s
 Type "hq"
 Sleep 1.5s

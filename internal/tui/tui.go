@@ -1695,8 +1695,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "y":
 				if m.CodeActive && len(m.CodeBlocks) > 0 {
-					m.CodeOverlay = true
-					m.CodeOverlaySrc = m.CodeBlocks[m.CopyIdx].Content
+					cmds = append(cmds, tea.SetClipboard(m.CodeBlocks[m.CopyIdx].Content))
+					m.StatusMsg = "Code copied to clipboard"
+					cmds = append(cmds, statusCmd(2*time.Second))
+				} else if m.LinkActive && len(m.Links) > 0 {
+					cmds = append(cmds, tea.SetClipboard(m.Links[m.LinkIdx].URL))
+					m.StatusMsg = "Link copied to clipboard"
+					cmds = append(cmds, statusCmd(2*time.Second))
 				}
 			case "esc":
 				if m.CodeOverlay {
@@ -1924,7 +1929,7 @@ func (m Model) renderHelpPanel() string {
 		{"↑↓ / jk", "move / scroll"},
 		{"enter / →", "open page"},
 		{"/", "search   n/N  next/prev"},
-		{"c / l / i", "code · link · image"},
+		{"c / l / i", "code · link · image  (y=copy)"},
 		{"q / ctrl+c", "quit"},
 	}
 	right := []pair{
